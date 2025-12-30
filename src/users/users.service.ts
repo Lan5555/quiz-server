@@ -231,4 +231,12 @@ export class UsersService {
       data: null,
     };
   }
+
+  pingServer(): NetResponse {
+    return {
+      success: true,
+      message: ' success',
+      data: null,
+    };
+  }
 }

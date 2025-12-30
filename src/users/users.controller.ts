@@ -59,4 +59,8 @@ export class UsersController {
   updateParam(@Body() body: ParameterDto) {
     return this.userService.updateParam(body.id, body.key, body.param);
   }
+  @Get('/api/ping-server')
+  pingServer() {
+    return this.userService.pingServer();
+  }
 }
