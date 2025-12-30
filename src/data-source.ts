@@ -1,8 +1,8 @@
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
-import { Question, User } from './entities/entity';
+
 import * as dotenv from 'dotenv';
-dotenv.config({ path: '.env.development' });
+dotenv.config({ path: '.env.production' });
 
 export const AppDataSource = new DataSource({
   type: 'mysql', // or postgres
@@ -13,8 +13,8 @@ export const AppDataSource = new DataSource({
   database: process.env.DB_NAME,
   synchronize: false,
   logging: true,
-  entities: [User, Question], // add all your entities here
-  migrations: ['src/migration/*.ts'],
+  entities: ['dist/**/*.entity.js'],
+  migrations: ['dist/migrations/*.js'],
   subscribers: [],
 });
 
