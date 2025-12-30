@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Question } from 'src/entity/entity';
+import { Question } from 'src/entities/entity';
 import { NetResponse } from 'src/helpers/types';
 import { CreateQuestionDto } from 'src/validators/question.dto';
 import { Repository } from 'typeorm';

@@ -11,7 +11,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath:
-        process.env.NODE_ENV !== 'production'
+        process.env.NODE_ENV === 'production'
           ? '.env.production'
           : '.env.development',
     }),
