@@ -56,8 +56,8 @@ export class QuestionService {
         success: true,
         message: 'Fetched questions successfully',
         data: {
-          totalQuizzes: 1,
-          totalQuestions: question.length,
+          totalQuizzes: question.length,
+          totalQuestions: question.reduce((u, a) => u + a.question.length, 0),
         },
       };
     }
