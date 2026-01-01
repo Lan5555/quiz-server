@@ -1,11 +1,13 @@
-import { Body, Controller, Delete, Get, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
 import { UsersService } from './users.service';
 import {
   OneUserDto,
   ParameterDto,
   SaveScoreDto,
+  StudentDto,
   UserDto,
 } from 'src/validators/user.dto';
+import { PayedDto } from 'src/validators/shop.dto';
 
 @Controller('users')
 export class UsersController {
@@ -62,5 +64,13 @@ export class UsersController {
   @Get('/api/ping-server')
   pingServer() {
     return this.userService.pingServer();
+  }
+  @Post('/api/login-student')
+  loginStudent(@Body() body: StudentDto) {
+    return this.userService.logInStudent(body.email, body.code);
+  }
+  @Post('/api/update-after-pay/:id')
+  updateParams(@Param('id') id: number, @Body() body: PayedDto) {
+    return this.userService.updateUserItems(body, Number(id));
   }
 }

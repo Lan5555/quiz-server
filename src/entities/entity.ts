@@ -23,6 +23,9 @@ export class User {
 
   @Column()
   score: number;
+
+  @Column()
+  time: number;
 }
 
 @Entity()
@@ -76,4 +79,18 @@ export class ReviewResponse {
   timeSpent: number;
   @Column()
   totalQuestions: number;
+}
+
+@Entity()
+export class Shop {
+  @PrimaryGeneratedColumn()
+  id: number;
+  @Column()
+  name: string;
+  @Column()
+  price: number;
+  @Column()
+  icon: string;
+  @Column()
+  description: string;
 }

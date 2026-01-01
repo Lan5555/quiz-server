@@ -29,6 +29,10 @@ export class UserDto {
   @IsInt()
   @IsOptional()
   score: number;
+
+  @IsInt()
+  @IsOptional()
+  time: number;
 }
 
 export class SaveScoreDto {
@@ -50,4 +54,11 @@ export class ParameterDto {
   key: 'email' | 'name';
   @IsString()
   param: string;
+}
+
+export class StudentDto {
+  @IsEmail()
+  email: string;
+  @IsString()
+  code: string;
 }

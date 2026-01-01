@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from 'src/entities/entity';
 import { NetResponse } from 'src/helpers/types';
+import { PayedDto } from 'src/validators/shop.dto';
 import { UserDto } from 'src/validators/user.dto';
 import { Repository } from 'typeorm';
 
@@ -121,6 +122,7 @@ export class UsersService {
         username: user.name,
         userId: user.id,
         attempts: newAttempts,
+        time: user.time,
       },
     };
   }
@@ -237,6 +239,71 @@ export class UsersService {
       success: true,
       message: ' success',
       data: null,
+    };
+  }
+
+  async logInStudent(email: string, code: string): Promise<NetResponse> {
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .where('user.email = :email', { email })
+      .andWhere("JSON_EXTRACT(user.codeInfo, '$.code') = :code", { code })
+      .getOne();
+
+    if (!user) {
+      return {
+        success: false,
+        message: 'User not found',
+        data: null,
+      };
+    }
+
+    return {
+      success: true,
+      message: `Welcome back ${user.name}`,
+      data: user,
+    };
+  }
+
+  async updateUserItems(val: PayedDto, id: number): Promise<NetResponse> {
+    const user = await this.userRepository.findOneBy({ id });
+
+    if (!user) {
+      return {
+        success: false,
+        message: 'User not found',
+        data: null,
+      };
+    }
+
+    // Prepare update payload
+    const updatePayload: Partial<typeof user> = {};
+
+    switch (val.productId) {
+      case 1: // attempts
+        updatePayload.codeInfo = {
+          ...user.codeInfo,
+          attempts: (user.codeInfo?.attempts || 0) + (val.params.attempts || 0),
+        };
+        break;
+
+      case 2: // time
+        updatePayload.time = (user.time || 0) + (val.params.time || 0);
+        break;
+
+      default:
+        updatePayload.codeInfo = {
+          ...user.codeInfo,
+          attempts: (user.codeInfo?.attempts || 0) + (val.params.attempts || 0),
+        };
+        break;
+    }
+
+    await this.userRepository.update({ id }, updatePayload);
+
+    return {
+      success: true,
+      message: 'Updated successfully',
+      data: updatePayload,
     };
   }
 }
