@@ -243,25 +243,26 @@ export class UsersService {
   }
 
   async logInStudent(email: string, code: string): Promise<NetResponse> {
-    const user = await this.userRepository
-      .createQueryBuilder('user')
-      .where('user.email = :email', { email })
-      .andWhere("JSON_EXTRACT(user.codeInfo, '$.code') = :code", { code })
-      .getOne();
-
+    const user = await this.userRepository.findOneBy({ email });
     if (!user) {
       return {
         success: false,
         message: 'User not found',
         data: null,
       };
+    } else if (user.email === email && user.codeInfo.code === code) {
+      return {
+        success: true,
+        message: `Welcome back ${user.name}`,
+        data: user,
+      };
+    } else {
+      return {
+        success: false,
+        message: 'Invalid Credentials',
+        data: null,
+      };
     }
-
-    return {
-      success: true,
-      message: `Welcome back ${user.name}`,
-      data: user,
-    };
   }
 
   async updateUserItems(val: PayedDto, id: number): Promise<NetResponse> {
