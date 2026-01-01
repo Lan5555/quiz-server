@@ -3,6 +3,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 
@@ -45,6 +46,34 @@ export class Question {
   @CreateDateColumn()
   createdAt: Date;
 
+  @Column()
+  totalQuestions: number;
+}
+
+@Index(['userId', 'quizName'], { unique: true })
+@Entity()
+export class ReviewResponse {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @Column()
+  userId: number;
+  @Column()
+  name: string;
+  @Column()
+  subtitle: string;
+  @CreateDateColumn()
+  completedDate: string;
+  @Column({ type: 'json' })
+  review: types.Review[];
+  @Column()
+  taken: boolean;
+  @Column()
+  quizName: string;
+  @Column()
+  score: number;
+  @Column()
+  timeSpent: number;
   @Column()
   totalQuestions: number;
 }

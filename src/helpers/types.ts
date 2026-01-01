@@ -9,3 +9,9 @@ export interface CodeStat {
   attempts: number;
   uses: number;
 }
+
+export interface Review {
+  question: string;
+  picked: string;
+  correct: string;
+}
