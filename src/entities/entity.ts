@@ -53,7 +53,7 @@ export class Question {
   totalQuestions: number;
 }
 
-@Index(['userId', 'quizName'], { unique: true })
+@Index(['quizName'], { unique: true })
 @Entity()
 export class ReviewResponse {
   @PrimaryGeneratedColumn()

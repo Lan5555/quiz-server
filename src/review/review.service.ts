@@ -21,7 +21,7 @@ export class ReviewService {
         },
       });
 
-      if (alreadyTaken) {
+      if (alreadyTaken && alreadyTaken.name === response.name) {
         return {
           success: false,
           message: 'User has already submitted a review',
@@ -41,10 +41,11 @@ export class ReviewService {
         message: 'Review Saved Successfully',
         data: savedReview,
       };
-    } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (e) {
       return {
         success: false,
-        message: error as string,
+        message: 'Failed to save review',
         data: null,
       };
     }
