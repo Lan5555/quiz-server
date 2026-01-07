@@ -18,6 +18,9 @@ export class UserDto {
   @IsOptional()
   id: number;
 
+  @IsInt()
+  userId: number;
+
   @IsString()
   @IsOptional()
   @MinLength(6)

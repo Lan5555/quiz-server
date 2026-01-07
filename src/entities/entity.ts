@@ -13,6 +13,9 @@ export class User {
   id: number;
 
   @Column()
+  userId: number;
+
+  @Column()
   name: string;
 
   @Column({ unique: true })
