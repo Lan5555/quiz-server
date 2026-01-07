@@ -40,8 +40,8 @@ export class UsersService {
     };
   }
 
-  async findUserById(id: number): Promise<NetResponse> {
-    const user = await this.userRepository.findOneBy({ id });
+  async findUserById(userId: number): Promise<NetResponse> {
+    const user = await this.userRepository.findOneBy({ userId });
 
     if (user) {
       return {
@@ -106,7 +106,7 @@ export class UsersService {
     const newAttempts = attempts - 1;
 
     await this.userRepository.update(
-      { id: user.id },
+      { userId: user.userId },
       {
         codeInfo: {
           ...user.codeInfo,
@@ -120,16 +120,16 @@ export class UsersService {
       message: `Welcome ${user.name}`,
       data: {
         username: user.name,
-        userId: user.id,
+        userId: user.userId,
         attempts: newAttempts,
         time: user.time,
       },
     };
   }
 
-  async saveUserScore(id: number, value: number): Promise<NetResponse> {
+  async saveUserScore(userId: number, value: number): Promise<NetResponse> {
     // Find the user first
-    const user = await this.userRepository.findOneBy({ id });
+    const user = await this.userRepository.findOneBy({ userId });
 
     if (!user) {
       return {
@@ -140,7 +140,7 @@ export class UsersService {
     }
 
     // Update the score for the found user
-    await this.userRepository.update(id, { score: value });
+    await this.userRepository.update(userId, { score: value });
 
     return {
       success: true,
@@ -165,13 +165,13 @@ export class UsersService {
   }
 
   async updateUserCode(
-    id: number,
+    userId: number,
     code: string,
     uses: number,
   ): Promise<NetResponse> {
-    const user = await this.userRepository.findOneBy({ id });
+    const user = await this.userRepository.findOneBy({ userId });
     if (user) {
-      await this.userRepository.update(id, {
+      await this.userRepository.update(userId, {
         codeInfo: { ...user.codeInfo, code, attempts: uses },
       });
       return {
@@ -187,10 +187,10 @@ export class UsersService {
     };
   }
 
-  async deleteUser(id: number): Promise<NetResponse> {
-    const user = await this.userRepository.findOneBy({ id });
+  async deleteUser(userId: number): Promise<NetResponse> {
+    const user = await this.userRepository.findOneBy({ userId });
     if (user) {
-      await this.userRepository.delete(user.id);
+      await this.userRepository.delete(user.userId);
       return {
         success: true,
         message: `${user.name} deleted successfully`,
@@ -205,19 +205,19 @@ export class UsersService {
   }
 
   async updateParam(
-    id: number,
+    userId: number,
     key: 'email' | 'name',
     param: string,
   ): Promise<NetResponse> {
-    const user = await this.userRepository.findOneBy({ id });
+    const user = await this.userRepository.findOneBy({ userId });
     if (user) {
       switch (key) {
         case 'email': {
-          await this.userRepository.update(id, { email: param });
+          await this.userRepository.update(userId, { email: param });
           break;
         }
         case 'name': {
-          await this.userRepository.update(id, { name: param });
+          await this.userRepository.update(userId, { name: param });
           break;
         }
       }
@@ -265,8 +265,8 @@ export class UsersService {
     }
   }
 
-  async updateUserItems(val: PayedDto, id: number): Promise<NetResponse> {
-    const user = await this.userRepository.findOneBy({ id });
+  async updateUserItems(val: PayedDto, userId: number): Promise<NetResponse> {
+    const user = await this.userRepository.findOneBy({ userId });
 
     if (!user) {
       return {
@@ -299,7 +299,7 @@ export class UsersService {
         break;
     }
 
-    await this.userRepository.update({ id }, updatePayload);
+    await this.userRepository.update({ userId }, updatePayload);
 
     return {
       success: true,
