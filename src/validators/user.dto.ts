@@ -19,6 +19,7 @@ export class UserDto {
   id: number;
 
   @IsInt()
+  @IsOptional()
   userId: number;
 
   @IsString()
@@ -40,19 +41,19 @@ export class UserDto {
 
 export class SaveScoreDto {
   @IsInt()
-  id: number;
+  userId: number;
   @IsInt()
   score: number;
 }
 
 export class OneUserDto {
   @IsInt()
-  id: number;
+  userId: number;
 }
 
 export class ParameterDto {
   @IsInt()
-  id: number;
+  userId: number;
   @IsString()
   key: 'email' | 'name';
   @IsString()

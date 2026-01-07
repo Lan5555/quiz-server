@@ -25,7 +25,7 @@ export class UsersController {
 
   @Post('/api/find-one-user')
   findOneUser(@Body() body: UserDto) {
-    return this.userService.findUserById(body.id);
+    return this.userService.findUserById(body.userId);
   }
 
   @Get('/api/find-all-users')
@@ -40,7 +40,7 @@ export class UsersController {
 
   @Post('/api/save-score')
   saveUserScore(@Body() info: SaveScoreDto) {
-    return this.userService.saveUserScore(info.id, info.score);
+    return this.userService.saveUserScore(info.userId, info.score);
   }
   @Post('/api/login-admin')
   loginAdmin(@Body() password: string) {
@@ -48,18 +48,24 @@ export class UsersController {
   }
 
   @Post('/api/update-code')
-  updateUserCode(@Body() body: { id: number; code: string; attempt: number }) {
-    return this.userService.updateUserCode(body.id, body.code, body.attempt);
+  updateUserCode(
+    @Body() body: { userId: number; code: string; attempt: number },
+  ) {
+    return this.userService.updateUserCode(
+      body.userId,
+      body.code,
+      body.attempt,
+    );
   }
 
   @Delete('/api/delete-user')
   deleteUser(@Body() user: OneUserDto) {
-    return this.userService.deleteUser(user.id);
+    return this.userService.deleteUser(user.userId);
   }
 
   @Post('/api/update-parameter')
   updateParam(@Body() body: ParameterDto) {
-    return this.userService.updateParam(body.id, body.key, body.param);
+    return this.userService.updateParam(body.userId, body.key, body.param);
   }
   @Get('/api/ping-server')
   pingServer() {

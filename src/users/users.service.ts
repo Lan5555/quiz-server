@@ -128,7 +128,6 @@ export class UsersService {
   }
 
   async saveUserScore(userId: number, value: number): Promise<NetResponse> {
-    // Find the user first
     const user = await this.userRepository.findOneBy({ userId });
 
     if (!user) {
@@ -139,8 +138,8 @@ export class UsersService {
       };
     }
 
-    // Update the score for the found user
-    await this.userRepository.update(userId, { score: value });
+    user.score = value;
+    await this.userRepository.save(user); // ✅ updates Neon correctly
 
     return {
       success: true,
@@ -170,36 +169,39 @@ export class UsersService {
     uses: number,
   ): Promise<NetResponse> {
     const user = await this.userRepository.findOneBy({ userId });
-    if (user) {
-      await this.userRepository.update(userId, {
-        codeInfo: { ...user.codeInfo, code, attempts: uses },
-      });
+    if (!user) {
       return {
-        success: true,
-        message: 'User code updated successfully',
+        success: false,
+        message: 'User not found',
         data: null,
       };
     }
+
+    user.codeInfo = { ...user.codeInfo, code, attempts: uses };
+    await this.userRepository.save(user); // updates JSON properly
+
     return {
-      success: false,
-      message: 'User not found',
+      success: true,
+      message: 'User code updated successfully',
       data: null,
     };
   }
 
   async deleteUser(userId: number): Promise<NetResponse> {
     const user = await this.userRepository.findOneBy({ userId });
-    if (user) {
-      await this.userRepository.delete(user.userId);
+    if (!user) {
       return {
-        success: true,
-        message: `${user.name} deleted successfully`,
+        success: false,
+        message: 'Unable to delete user',
         data: null,
       };
     }
+
+    await this.userRepository.remove(user); // ✅ deletes the correct row
+
     return {
-      success: false,
-      message: 'Unable to delete user',
+      success: true,
+      message: `${user.name} deleted successfully`,
       data: null,
     };
   }
@@ -210,26 +212,20 @@ export class UsersService {
     param: string,
   ): Promise<NetResponse> {
     const user = await this.userRepository.findOneBy({ userId });
-    if (user) {
-      switch (key) {
-        case 'email': {
-          await this.userRepository.update(userId, { email: param });
-          break;
-        }
-        case 'name': {
-          await this.userRepository.update(userId, { name: param });
-          break;
-        }
-      }
+    if (!user) {
       return {
-        success: true,
-        message: 'User parameter updated successfully',
+        success: false,
+        message: 'User not found',
         data: null,
       };
     }
+
+    user[key] = param; // ✅ update property dynamically
+    await this.userRepository.save(user); // ✅ ensures Neon gets the update
+
     return {
-      success: false,
-      message: 'User not found',
+      success: true,
+      message: 'User parameter updated successfully',
       data: null,
     };
   }
@@ -276,35 +272,33 @@ export class UsersService {
       };
     }
 
-    // Prepare update payload
-    const updatePayload: Partial<typeof user> = {};
-
+    // Update the fields
     switch (val.productId) {
       case 1: // attempts
-        updatePayload.codeInfo = {
+        user.codeInfo = {
           ...user.codeInfo,
           attempts: (user.codeInfo?.attempts || 0) + (val.params.attempts || 0),
         };
         break;
 
       case 2: // time
-        updatePayload.time = (user.time || 0) + (val.params.time || 0);
+        user.time = (user.time || 0) + (val.params.time || 0);
         break;
 
-      default:
-        updatePayload.codeInfo = {
+      default: // fallback
+        user.codeInfo = {
           ...user.codeInfo,
           attempts: (user.codeInfo?.attempts || 0) + (val.params.attempts || 0),
         };
         break;
     }
 
-    await this.userRepository.update({ userId }, updatePayload);
+    await this.userRepository.save(user); // ✅ ensures Neon updates JSON correctly
 
     return {
       success: true,
       message: 'Updated successfully',
-      data: updatePayload,
+      data: user,
     };
   }
 }
