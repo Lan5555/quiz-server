@@ -45,7 +45,8 @@ export class ReviewService {
     } catch (e) {
       return {
         success: false,
-        message: 'Failed to save review',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        message: 'Failed to save review' + `${e.message}`,
         data: null,
       };
     }
