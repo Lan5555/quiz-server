@@ -3,7 +3,6 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  Index,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 
@@ -56,7 +55,6 @@ export class Question {
   totalQuestions: number;
 }
 
-@Index(['quizName'], { unique: true })
 @Entity()
 export class ReviewResponse {
   @PrimaryGeneratedColumn()
