@@ -86,5 +86,5 @@ export class UsersController {
   @Post('/api/update-user-time')
   updateUserTime(@Body() body: { userId: number; time: number }) {
     return this.userService.updateUserTime(body.userId, body.time);
-  }
+  } //end class
 }
