@@ -79,4 +79,12 @@ export class UsersController {
   updateParams(@Param('id') id: number, @Body() body: PayedDto) {
     return this.userService.updateUserItems(body, Number(id));
   }
+  @Post('/api/update-code-attempt')
+  updateCodeAttempt(@Body() body: { userId: number; attempts: number }) {
+    return this.userService.updateUserCodeAttemt(body.userId, body.attempts);
+  }
+  @Post('/api/update-user-time')
+  updateUserTime(@Body() body: { userId: number; time: number }) {
+    return this.userService.updateUserTime(body.userId, body.time);
+  }
 }

@@ -301,4 +301,46 @@ export class UsersService {
       data: user,
     };
   }
+
+  async updateUserCodeAttemt(
+    userId: number,
+    attempts: number,
+  ): Promise<NetResponse> {
+    const user = await this.userRepository.findOneBy({ userId });
+    if (!user) {
+      return {
+        success: false,
+        message: 'User not found',
+        data: null,
+      };
+    }
+    user.codeInfo = {
+      ...user.codeInfo,
+      attempts: attempts,
+    };
+    await this.userRepository.save(user); // updates JSON properly
+    return {
+      success: true,
+      message: 'User code attempts updated successfully',
+      data: null,
+    };
+  }
+
+  async updateUserTime(userId: number, time: number): Promise<NetResponse> {
+    const user = await this.userRepository.findOneBy({ userId });
+    if (!user) {
+      return {
+        success: false,
+        message: 'User not found',
+        data: null,
+      };
+    }
+    user.time = time;
+    await this.userRepository.save(user);
+    return {
+      success: true,
+      message: 'User time updated successfully',
+      data: null,
+    };
+  }
 }
