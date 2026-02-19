@@ -19,6 +19,8 @@ export class QuestionService {
       code: questions.code,
       question: questions.question, // already an array
       totalQuestions: questions.totalQuestions,
+      isDynamic: questions.isDynamic,
+      dynamicTime: questions.dynamicTime,
     });
 
     await this.questionDb.save(questionEntity);

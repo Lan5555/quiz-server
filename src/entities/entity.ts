@@ -53,6 +53,12 @@ export class Question {
 
   @Column()
   totalQuestions: number;
+
+  @Column()
+  isDynamic: boolean;
+
+  @Column()
+  dynamicTime: number;
 }
 
 @Entity()

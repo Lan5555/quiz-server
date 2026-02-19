@@ -6,6 +6,7 @@ import {
   ArrayNotEmpty,
   ValidateNested,
   IsInt,
+  IsBoolean,
 } from 'class-validator';
 import { QuestionItemDto } from './question_item.dto';
 
@@ -24,6 +25,12 @@ export class CreateQuestionDto {
 
   @IsNumber()
   totalQuestions: number;
+
+  @IsBoolean()
+  isDynamic: boolean;
+
+  @IsInt()
+  dynamicTime: number;
 }
 
 export class fetchQuestionsDto {
