@@ -117,5 +117,7 @@ export class PurchaseTicket {
   @Column()
   email: string;
   @Column()
+  department: string;
+  @Column()
   purchaseDate: string;
 }

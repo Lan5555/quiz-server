@@ -12,6 +12,8 @@ class PurchaseTicketDto {
   @IsString()
   ticketId: string;
   @IsString()
+  department: string;
+  @IsString()
   purchaseDate: string;
 }
 
