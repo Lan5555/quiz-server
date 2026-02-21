@@ -101,3 +101,21 @@ export class Shop {
   @Column()
   description: string;
 }
+
+@Entity()
+export class PurchaseTicket {
+  @PrimaryGeneratedColumn()
+  id: number;
+  @Column()
+  ticketId: string;
+  @Column()
+  name: string;
+  @Column()
+  phone: string;
+  @Column()
+  price: number;
+  @Column()
+  email: string;
+  @Column()
+  purchaseDate: string;
+}

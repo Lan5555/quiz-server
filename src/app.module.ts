@@ -7,6 +7,7 @@ import { QuestionModule } from './question/question.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ReviewModule } from './review/review.module';
 import { ShopModule } from './shop/shop.module';
+import { PurchaseTicketModule } from './purchase-ticket/purchase-ticket.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { ShopModule } from './shop/shop.module';
     QuestionModule,
     ReviewModule,
     ShopModule,
+    PurchaseTicketModule,
   ],
   controllers: [AppController],
   providers: [AppService],
