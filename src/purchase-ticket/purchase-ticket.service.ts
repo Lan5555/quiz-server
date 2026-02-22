@@ -22,12 +22,23 @@ export class PurchaseTicketService {
     };
   }
 
-  async getPurchaseTicketsByUserId(ticketId: string): Promise<NetResponse> {
+  async getPurchaseTicketsByUserId(id: string): Promise<NetResponse> {
+    const ticketId = id.startsWith('#') ? id : `#${id}`;
+
     const tickets = await this.purchaseTicketDb.findBy({ ticketId });
+
+    if (tickets.length > 0) {
+      return {
+        success: true,
+        message: 'Purchase tickets fetched successfully',
+        data: tickets,
+      };
+    }
+
     return {
-      success: true,
-      message: 'Purchase tickets fetched successfully',
-      data: tickets,
+      success: false,
+      message: 'No purchase tickets found for the given ticket ID',
+      data: null,
     };
   }
 }
