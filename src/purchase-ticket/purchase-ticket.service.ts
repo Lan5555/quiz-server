@@ -41,4 +41,29 @@ export class PurchaseTicketService {
       data: null,
     };
   }
+
+  async getNumberOfRegisteredStudents(): Promise<NetResponse> {
+    try {
+      const db = await this.purchaseTicketDb.find();
+      if (db) {
+        return {
+          success: true,
+          message: 'Data fetched successfully',
+          data: db,
+        };
+      } else {
+        return {
+          success: false,
+          message: 'No data found',
+          data: null,
+        };
+      }
+    } catch (e) {
+      return {
+        success: false,
+        message: 'An error has occured' + e,
+        data: null,
+      };
+    }
+  }
 }

@@ -13,4 +13,8 @@ export class PurchaseTicketController {
   async getPurchaseTicketsByUserId(@Query('ticketId') ticketId: string) {
     return this.purchaseTicketService.getPurchaseTicketsByUserId(ticketId);
   }
+  @Get('/get-registered-students')
+  async getNumberOfRegisteredStudents() {
+    return await this.purchaseTicketService.getNumberOfRegisteredStudents();
+  }
 }
