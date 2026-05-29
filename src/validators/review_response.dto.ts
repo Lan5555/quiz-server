@@ -1,25 +1,25 @@
 import { IsArray, IsBoolean, IsInt, IsString } from 'class-validator';
-import * as types from 'src/helpers/types';
+import * as types from '../helpers/types';
 
 export class ReviewResponseDto {
   @IsInt()
-  userId: number;
+  userId!: number;
   @IsString()
-  name: string;
+  name!: string;
   @IsString()
-  subtitle: string;
+  subtitle!: string;
   @IsString()
-  completedDate: string;
+  completedDate!: string;
   @IsArray()
-  review: types.Review[];
+  review!: types.Review[];
   @IsBoolean()
-  taken: boolean;
+  taken!: boolean;
   @IsString()
-  quizName: string;
+  quizName!: string;
   @IsInt()
-  score: number;
+  score!: number;
   @IsInt()
-  timeSpent: number;
+  timeSpent!: number;
   @IsInt()
-  totalQuestions: number;
+  totalQuestions!: number;
 }

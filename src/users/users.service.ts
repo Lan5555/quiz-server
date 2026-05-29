@@ -1,10 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { User } from 'src/entities/entity';
-import { NetResponse } from 'src/helpers/types';
-import { PayedDto } from 'src/validators/shop.dto';
-import { UserDto } from 'src/validators/user.dto';
+import { User } from '../entities/entity';
+import { NetResponse } from '../helpers/types';
+import { PayedDto } from '../validators/shop.dto';
+import { UserDto } from '../validators/user.dto';
 import { Repository } from 'typeorm';
+import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class UsersService {
@@ -123,6 +124,7 @@ export class UsersService {
         userId: user.userId,
         attempts: newAttempts,
         time: user.time,
+        token: uuidv4(),
       },
     };
   }
@@ -150,10 +152,16 @@ export class UsersService {
 
   logInAdmin(password: string): NetResponse {
     if (password['password'] == 'zelink123') {
+      const dataResponse = {
+        name: 'Nicholas Johnson',
+        email: 'okekejohnson24@gmail.com',
+        level: 3,
+        token: uuidv4(),
+      };
       return {
         success: true,
         message: 'Welcome back admin',
-        data: null,
+        data: dataResponse,
       };
     }
     return {
@@ -250,7 +258,10 @@ export class UsersService {
       return {
         success: true,
         message: `Welcome back ${user.name}`,
-        data: user,
+        data: {
+          ...user,
+          token: uuidv4(),
+        },
       };
     } else {
       return {
