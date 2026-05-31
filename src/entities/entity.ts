@@ -1,4 +1,4 @@
-import * as types from 'src/helpers/types';
+import * as types from '../helpers/types';
 import {
   Column,
   CreateDateColumn,
@@ -9,115 +9,118 @@ import {
 @Entity()
 export class User {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column()
-  userId: number;
+  userId!: number;
 
   @Column()
-  name: string;
+  name!: string;
 
   @Column({ unique: true })
-  email: string;
+  email!: string;
 
   @Column('json')
-  codeInfo: types.CodeStat;
+  codeInfo!: types.CodeStat;
 
   @Column()
-  score: number;
+  score!: number;
 
   @Column()
-  time: number;
+  time!: number;
+
+  @Column({ nullable: true, type: 'timestamp' })
+  deadline!: Date | null;
 }
 
 @Entity()
 export class Question {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column()
-  name: string;
+  name!: string;
 
   @Column()
-  code: number;
+  code!: number;
 
   @Column({ type: 'json' })
-  question: {
+  question!: {
     question: string;
     options: string[];
     correct: number;
   }[];
 
   @CreateDateColumn()
-  createdAt: Date;
+  createdAt!: Date;
 
   @Column()
-  totalQuestions: number;
+  totalQuestions!: number;
 
   @Column()
-  isDynamic: boolean;
+  isDynamic!: boolean;
 
   @Column()
-  dynamicTime: number;
+  dynamicTime!: number;
 }
 
 @Entity()
 export class ReviewResponse {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column()
-  userId: number;
+  userId!: number;
   @Column()
-  name: string;
+  name!: string;
   @Column()
-  subtitle: string;
+  subtitle!: string;
   @CreateDateColumn()
-  completedDate: string;
+  completedDate!: string;
   @Column({ type: 'json' })
-  review: types.Review[];
+  review!: types.Review[];
   @Column()
-  taken: boolean;
+  taken!: boolean;
   @Column()
-  quizName: string;
+  quizName!: string;
   @Column()
-  score: number;
+  score!: number;
   @Column()
-  timeSpent: number;
+  timeSpent!: number;
   @Column()
-  totalQuestions: number;
+  totalQuestions!: number;
 }
 
 @Entity()
 export class Shop {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
   @Column()
-  name: string;
+  name!: string;
   @Column()
-  price: number;
+  price!: number;
   @Column()
-  icon: string;
+  icon!: string;
   @Column()
-  description: string;
+  description!: string;
 }
 
 @Entity()
 export class PurchaseTicket {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
   @Column()
-  ticketId: string;
+  ticketId!: string;
   @Column()
-  name: string;
+  name!: string;
   @Column()
-  phone: string;
+  phone!: string;
   @Column()
-  price: number;
+  price!: number;
   @Column()
-  email: string;
+  email!: string;
   @Column()
-  department: string;
+  department!: string;
   @Column()
-  purchaseDate: string;
+  purchaseDate!: string;
 }

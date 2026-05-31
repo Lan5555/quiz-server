@@ -8,9 +8,12 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ReviewModule } from './review/review.module';
 import { ShopModule } from './shop/shop.module';
 import { PurchaseTicketModule } from './purchase-ticket/purchase-ticket.module';
+import { CronJobModule } from './cron-job/cron-job.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath:
@@ -41,6 +44,7 @@ import { PurchaseTicketModule } from './purchase-ticket/purchase-ticket.module';
     ReviewModule,
     ShopModule,
     PurchaseTicketModule,
+    CronJobModule,
   ],
   controllers: [AppController],
   providers: [AppService],

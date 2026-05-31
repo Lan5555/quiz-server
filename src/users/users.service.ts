@@ -354,4 +354,30 @@ export class UsersService {
       data: null,
     };
   }
+
+  async updateDeadLine(userId: number, deadline: Date): Promise<NetResponse> {
+    try {
+      const user = await this.userRepository.findOneBy({ userId });
+      if (!user) {
+        return {
+          success: false,
+          message: 'User not found',
+          data: null,
+        };
+      }
+      user.deadline = deadline;
+      await this.userRepository.save(user);
+      return {
+        success: true,
+        message: 'User deadline updated successfully',
+        data: null,
+      };
+    } catch (e: unknown) {
+      return {
+        success: false,
+        message: e instanceof Error ? e.message : 'An unknown error occurred',
+        data: null,
+      };
+    }
+  }
 }

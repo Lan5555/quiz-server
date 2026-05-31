@@ -1,4 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Post,
+} from '@nestjs/common';
 import { UsersService } from './users.service';
 import {
   OneUserDto,
@@ -87,4 +95,11 @@ export class UsersController {
   updateUserTime(@Body() body: { userId: number; time: number }) {
     return this.userService.updateUserTime(body.userId, body.time);
   } //end class
+  @Post('/api/update-deadline/:id')
+  updateDeadline(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { deadline: Date },
+  ) {
+    return this.userService.updateDeadLine(Number(id), body.deadline);
+  }
 }
