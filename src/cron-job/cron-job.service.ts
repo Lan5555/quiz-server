@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { LessThanOrEqual, Repository } from 'typeorm';
 import { User } from '../entities/entity';
-import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 
 @Injectable()
@@ -10,9 +9,6 @@ export class CronJobService {
     @InjectRepository(User) private readonly userRepository: Repository<User>,
   ) {}
 
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT, {
-    timeZone: 'Africa/Lagos',
-  })
   async updateUserQuizAttempt() {
     const users = await this.userRepository.find({
       where: { deadline: LessThanOrEqual(new Date()) },
