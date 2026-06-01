@@ -6,12 +6,14 @@ import { PayedDto } from '../validators/shop.dto';
 import { UserDto } from '../validators/user.dto';
 import { Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
+import { CronJobService } from 'src/cron-job/cron-job.service';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly cronjobService: CronJobService,
   ) {}
 
   async saveUserData(userDetails: UserDto): Promise<NetResponse> {
@@ -238,7 +240,8 @@ export class UsersService {
     };
   }
 
-  pingServer(): NetResponse {
+  async pingServer(): Promise<NetResponse> {
+    await this.cronjobService.updateUserQuizAttempt();
     return {
       success: true,
       message: ' success',
