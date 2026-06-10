@@ -375,7 +375,14 @@ export class UsersService {
       await this.emailService.sendEmail(
         user.email,
         'Deadline Update Notification',
-        `Dear ${user.name}, your new quiz date is set to ${deadline.toLocaleString()}. Please make sure to complete your quiz on the official quiz day set.`,
+        `Dear ${user.name}, your new quiz date is set to ${new Date(
+          deadline,
+        ).toLocaleDateString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        })}. Please make sure to complete your quiz on the official quiz day set.`,
         'notification',
       );
       return {
