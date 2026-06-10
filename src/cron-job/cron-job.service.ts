@@ -16,7 +16,7 @@ export class CronJobService {
       where: { deadline: LessThanOrEqual(new Date()) },
     });
     const sendEmailToReadyUser = users.filter(
-      (user) => user.deadline && user.deadline <= new Date(),
+      (user) => user.deadline && user.deadline == new Date(),
     );
     const toUpdate = users.map((user) => ({
       ...user,
