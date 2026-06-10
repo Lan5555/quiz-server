@@ -7,6 +7,7 @@ import { UserDto } from '../validators/user.dto';
 import { Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { CronJobService } from 'src/cron-job/cron-job.service';
+import { EmailServiceService } from 'src/email-service/email-service.service';
 
 @Injectable()
 export class UsersService {
@@ -14,6 +15,7 @@ export class UsersService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly cronjobService: CronJobService,
+    private readonly emailService: EmailServiceService,
   ) {}
 
   async saveUserData(userDetails: UserDto): Promise<NetResponse> {
@@ -370,6 +372,12 @@ export class UsersService {
       }
       user.deadline = deadline;
       await this.userRepository.save(user);
+      await this.emailService.sendEmail(
+        user.email,
+        'Deadline Update Notification',
+        `Dear ${user.name}, your new quiz date is set to ${deadline.toLocaleString()}. Please make sure to complete your quiz on the official quiz day set.`,
+        'notification',
+      );
       return {
         success: true,
         message: 'User deadline updated successfully',

@@ -10,6 +10,7 @@ import { ShopModule } from './shop/shop.module';
 import { PurchaseTicketModule } from './purchase-ticket/purchase-ticket.module';
 import { CronJobModule } from './cron-job/cron-job.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { EmailServiceModule } from './email-service/email-service.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     ShopModule,
     PurchaseTicketModule,
     CronJobModule,
+    EmailServiceModule,
   ],
   controllers: [AppController],
   providers: [AppService],
