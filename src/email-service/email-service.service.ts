@@ -44,8 +44,7 @@ export class EmailServiceService {
     const currentYear = new Date().getFullYear();
 
     // Use default values since options is not defined
-    const buttonUrl: string | null =
-      'https://test-app-sandy-one.vercel.app/pages/';
+    const buttonUrl: string | null = 'https://test-app-sandy-one.vercel.app/';
     const userName = 'Valued Customer';
     const physicalAddress = 'Online Platform';
 
