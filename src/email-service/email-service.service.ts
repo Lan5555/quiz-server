@@ -288,9 +288,7 @@ export class EmailServiceService {
                 <p style="margin-top: 16px; font-size: 14px; color: #64748b;">This code will expire in 10 minutes</p>
               </div>
             `
-                : `
-              <p class="message-text" style="margin-bottom: 16px;">${content}</p>
-            `
+                : ''
             }
             
             ${
