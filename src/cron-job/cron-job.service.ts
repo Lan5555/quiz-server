@@ -15,9 +15,13 @@ export class CronJobService {
     const users = await this.userRepository.find({
       where: { deadline: LessThanOrEqual(new Date()) },
     });
+
+    const today = new Date().toDateString();
     const sendEmailToReadyUser = users.filter(
-      (user) => user.deadline && user.deadline == new Date(),
+      (user) =>
+        user.deadline && new Date(user.deadline).toDateString() === today,
     );
+
     const toUpdate = users.map((user) => ({
       ...user,
       codeInfo: { ...user.codeInfo, attempts: user.codeInfo.attempts + 1 },
