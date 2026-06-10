@@ -21,7 +21,7 @@ export class CronJobService {
       (user) =>
         user.deadline && new Date(user.deadline).toDateString() === today,
     );
-
+    console.log(sendEmailToReadyUser);
     const toUpdate = users.map((user) => ({
       ...user,
       codeInfo: { ...user.codeInfo, attempts: user.codeInfo.attempts + 1 },
