@@ -89,4 +89,16 @@ export class MiscService {
       data: { ...entry, userId: user?.userId, quizId: user?.quizId },
     };
   }
+  async deleteKey(id: number) {
+    const entry = await this.miscRepository.findOneBy({ key: id.toString() });
+    if (!entry) {
+      return;
+    }
+    await this.miscRepository.delete(id);
+    return {
+      success: true,
+      message: 'Key deleted successfully',
+      data: null,
+    };
+  }
 }
