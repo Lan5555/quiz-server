@@ -98,8 +98,12 @@ export class UsersController {
   @Post('/api/update-deadline/:id')
   updateDeadline(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { deadline: Date },
+    @Body() body: { deadline: Date; quizId: number },
   ) {
-    return this.userService.updateDeadLine(Number(id), body.deadline);
+    return this.userService.updateDeadLine(
+      Number(id),
+      body.deadline,
+      body.quizId,
+    );
   }
 }

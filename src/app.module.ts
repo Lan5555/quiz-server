@@ -11,6 +11,7 @@ import { PurchaseTicketModule } from './purchase-ticket/purchase-ticket.module';
 import { CronJobModule } from './cron-job/cron-job.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { EmailServiceModule } from './email-service/email-service.module';
+import { MiscModule } from './misc/misc.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { EmailServiceModule } from './email-service/email-service.module';
     PurchaseTicketModule,
     CronJobModule,
     EmailServiceModule,
+    MiscModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -31,6 +31,8 @@ export class User {
 
   @Column({ nullable: true, type: 'timestamp' })
   deadline!: Date | null;
+  @Column({ nullable: true })
+  quizId!: number;
 }
 
 @Entity()

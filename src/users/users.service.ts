@@ -8,6 +8,7 @@ import { Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { CronJobService } from 'src/cron-job/cron-job.service';
 import { EmailServiceService } from 'src/email-service/email-service.service';
+import { Misc } from 'src/misc/entities/misc.entity';
 
 @Injectable()
 export class UsersService {
@@ -16,6 +17,7 @@ export class UsersService {
     private readonly userRepository: Repository<User>,
     private readonly cronjobService: CronJobService,
     private readonly emailService: EmailServiceService,
+    @InjectRepository(Misc) private readonly miscRepository: Repository<Misc>,
   ) {}
 
   async saveUserData(userDetails: UserDto): Promise<NetResponse> {
@@ -300,6 +302,18 @@ export class UsersService {
       case 2: // time
         user.time = (user.time || 0) + (val.params.time || 0);
         break;
+      case 3:
+        await this.miscRepository.save({
+          key: userId.toString(),
+          value: val.params.quizKey,
+        });
+        await this.emailService.sendEmail(
+          user.email,
+          'Quiz Key Update',
+          `Dear ${user.name}, your new quiz reveal key is set to ${val.params.quizKey}. Please use this key to reveal your quiz.`,
+          'notification',
+        );
+        break;
 
       default: // fallback
         user.codeInfo = {
@@ -313,7 +327,10 @@ export class UsersService {
 
     return {
       success: true,
-      message: 'Updated successfully',
+      message:
+        val.productId === 3
+          ? 'Quiz key updated successfully kindly check your email'
+          : 'User items pdated successfully',
       data: user,
     };
   }
@@ -360,7 +377,11 @@ export class UsersService {
     };
   }
 
-  async updateDeadLine(userId: number, deadline: Date): Promise<NetResponse> {
+  async updateDeadLine(
+    userId: number,
+    deadline: Date,
+    quizId: number,
+  ): Promise<NetResponse> {
     try {
       const user = await this.userRepository.findOneBy({ userId });
       if (!user) {
@@ -371,6 +392,7 @@ export class UsersService {
         };
       }
       user.deadline = deadline;
+      user.quizId = quizId;
       await this.userRepository.save(user);
       await this.emailService.sendEmail(
         user.email,

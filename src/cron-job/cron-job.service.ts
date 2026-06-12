@@ -26,6 +26,7 @@ export class CronJobService {
       ...user,
       codeInfo: { ...user.codeInfo, attempts: user.codeInfo.attempts + 1 },
       deadline: null,
+      quizId: null,
     }));
     if (sendEmailToReadyUser.length > 0) {
       await Promise.all(
@@ -39,6 +40,6 @@ export class CronJobService {
         ),
       );
     }
-    await this.userRepository.save(toUpdate);
+    await this.userRepository.save(toUpdate as any);
   }
 }

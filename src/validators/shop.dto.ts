@@ -2,18 +2,18 @@ import { IsInt, IsObject, IsString } from 'class-validator';
 
 export class ShopDto {
   @IsString()
-  name: string;
+  name!: string;
   @IsInt()
-  price: number;
+  price!: number;
   @IsString()
-  icon: string;
+  icon!: string;
   @IsString()
-  description: string;
+  description!: string;
 }
 
 export class PayedDto {
   @IsInt()
-  productId: number;
+  productId!: number;
   @IsObject()
-  params: { attempts: number; time: number };
+  params!: { attempts: number; time: number; quizKey: string };
 }

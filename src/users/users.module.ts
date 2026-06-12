@@ -5,9 +5,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from 'src/entities/entity';
 import { CronJobService } from 'src/cron-job/cron-job.service';
 import { EmailServiceService } from 'src/email-service/email-service.service';
+import { Misc } from 'src/misc/entities/misc.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User])],
+  imports: [TypeOrmModule.forFeature([User, Misc])],
   controllers: [UsersController],
   providers: [UsersService, CronJobService, EmailServiceService],
 })
