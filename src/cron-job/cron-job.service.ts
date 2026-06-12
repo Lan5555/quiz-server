@@ -34,7 +34,7 @@ export class CronJobService {
           this.emailService.sendEmail(
             user.email,
             'Quiz Attempt Update',
-            `Dear ${user.name}, your quiz attempt has been updated. You now have ${user.codeInfo.attempts} attempts. Please check your account for more details.`,
+            `Dear ${user.name}, your quiz attempt has been updated. You now have ${user.codeInfo.attempts + 1} attempts. Please check your account for more details.`,
             'notification',
           ),
         ),
