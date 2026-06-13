@@ -292,15 +292,35 @@ export class UsersService {
 
     // Update the fields
     switch (val.productId) {
-      case 1: // attempts
+      case 1: {
+        // attempts
         user.codeInfo = {
           ...user.codeInfo,
           attempts: (user.codeInfo?.attempts || 0) + (val.params.attempts || 0),
         };
+
+        const emailMessage =
+          user.quizId != null
+            ? `Your quiz attempt count has been updated. You now have ${user.codeInfo.attempts} attempts for quiz ID ${user.quizId}. Please check your account for more details.`
+            : `Your quiz attempt count has been updated. You now have ${user.codeInfo.attempts} attempts. Please check your account for more details.`;
+
+        await this.emailService.sendEmail(
+          user.email,
+          'Quiz Attempt Update',
+          emailMessage,
+          'notification',
+        );
         break;
+      }
 
       case 2: // time
         user.time = (user.time || 0) + (val.params.time || 0);
+        await this.emailService.sendEmail(
+          user.email,
+          'Quiz Time Update',
+          `Dear ${user.name}, your new quiz time is ${user.time}. Please check your account for more details.`,
+          'notification',
+        );
         break;
       case 3:
         await this.miscRepository.save({
