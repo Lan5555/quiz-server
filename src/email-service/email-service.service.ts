@@ -17,26 +17,22 @@ export class EmailServiceService {
         title: string;
         headerColor: string;
         icon: string;
-        buttonText: string;
       }
     > = {
       message: {
         title: 'New Message',
         headerColor: 'linear-gradient(135deg, #6366f1, #4f46e5)',
         icon: '💬',
-        buttonText: 'View Message',
       },
       otp: {
         title: 'Verification Code',
         headerColor: 'linear-gradient(135deg, #f59e0b, #d97706)',
         icon: '🔐',
-        buttonText: 'Verify Now',
       },
       notification: {
         title: 'System Notification',
         headerColor: 'linear-gradient(135deg, #10b981, #059669)',
         icon: 'ℹ️',
-        buttonText: 'Visit Portal',
       },
     };
 
@@ -44,7 +40,6 @@ export class EmailServiceService {
     const currentYear = new Date().getFullYear();
 
     // Use default values since options is not defined
-    const buttonUrl: string | null = 'https://test-app-sandy-one.vercel.app/';
     const userName = 'Valued Customer';
     const physicalAddress = 'Online Platform';
 
@@ -290,16 +285,6 @@ export class EmailServiceService {
                 : ''
             }
             
-            ${
-              buttonUrl
-                ? `
-              <div style="text-align: center;">
-                <a href="${buttonUrl}" class="button">${selectedConfig.buttonText}</a>
-              </div>
-              <div class="divider"></div>
-            `
-                : ''
-            }
             
             ${type !== 'otp' ? '<div class="divider"></div>' : ''}
           </div>
@@ -313,7 +298,7 @@ export class EmailServiceService {
               © ${currentYear} Lan's Hub. All rights reserved.
             </p>
             <p class="footer-text">
-              You received this email because you have an account with Lan's Hub.<br>
+              You received this email because you have an account with Lan's Hub.
             </p>
           </div>
         </div>
@@ -330,8 +315,6 @@ Hello ${userName},
 ${type === 'otp' ? 'Your verification code is ready. Please use the code below to complete your verification process:' : content}
 
 ${type === 'otp' ? `Verification Code: ${content}\nThis code will expire in 10 minutes\n` : ''}
-
-${buttonUrl ? `To continue, visit: ${buttonUrl}\n` : ''}
 
 ---
 Lan's Hub
