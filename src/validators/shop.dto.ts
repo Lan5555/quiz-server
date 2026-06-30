@@ -15,5 +15,5 @@ export class PayedDto {
   @IsInt()
   productId!: number;
   @IsObject()
-  params!: { attempts: number; time: number; quizKey: string };
+  params!: { attempts: number; time: number; quizKey: string; program: string };
 }

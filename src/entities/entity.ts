@@ -33,6 +33,8 @@ export class User {
   deadline!: Date | null;
   @Column({ nullable: true })
   quizId!: number;
+  @Column({ default: 'Regular' })
+  currentProgram!: string;
 }
 
 @Entity()

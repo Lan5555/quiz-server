@@ -322,7 +322,7 @@ export class UsersService {
           'notification',
         );
         break;
-      case 3:
+      case 3: // Reveal Key
         await this.miscRepository.save({
           key: userId.toString(),
           value: val.params.quizKey,
@@ -331,6 +331,33 @@ export class UsersService {
           user.email,
           'Quiz Key Update',
           `Dear ${user.name}, your new quiz reveal key is set to ${val.params.quizKey}. Please use this key to reveal your quiz.`,
+          'notification',
+        );
+        break;
+      case 4:
+        user.currentProgram = val.params.program;
+        await this.emailService.sendEmail(
+          user.email,
+          'Program Update',
+          `Dear ${user.name}, your new Program is set to ${user.currentProgram}. Please check your account for more details.`,
+          'notification',
+        );
+        break;
+      case 5:
+        user.currentProgram = val.params.program;
+        await this.emailService.sendEmail(
+          user.email,
+          'Program Update',
+          `Dear ${user.name}, your new Program is set to ${user.currentProgram}. Please check your account for more details.`,
+          'notification',
+        );
+        break;
+      case 6:
+        user.currentProgram = val.params.program;
+        await this.emailService.sendEmail(
+          user.email,
+          'Program Update',
+          `Dear ${user.name}, your new Program is set to ${user.currentProgram}. Please check your account for more details.`,
           'notification',
         );
         break;
@@ -350,7 +377,7 @@ export class UsersService {
       message:
         val.productId === 3
           ? 'Quiz key updated successfully kindly check your email'
-          : 'User items pdated successfully',
+          : 'User items updated successfully',
       data: user,
     };
   }
