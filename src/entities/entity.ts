@@ -35,6 +35,8 @@ export class User {
   quizId!: number;
   @Column({ default: 'Regular' })
   currentProgram!: string;
+  @Column({ default: false })
+  activated!: boolean;
 }
 
 @Entity()

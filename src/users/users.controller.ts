@@ -106,4 +106,8 @@ export class UsersController {
       body.quizId,
     );
   }
+  @Get('/api/activate-user-v3-hash/:id')
+  async activateUser(@Param('id', ParseIntPipe) id: number) {
+    return this.userService.activateUser(Number(id));
+  }
 }

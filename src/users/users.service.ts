@@ -467,4 +467,35 @@ export class UsersService {
       };
     }
   }
+  async activateUser(userId: number): Promise<NetResponse> {
+    try {
+      const user = await this.userRepository.findOneBy({ userId });
+      if (!user) {
+        return {
+          success: false,
+          message: 'User not found',
+          data: null,
+        };
+      }
+      user.activated = true;
+      await this.userRepository.save(user);
+      await this.emailService.sendEmail(
+        user.email,
+        'Account Activation Notification',
+        `Dear ${user.name}, your account has been successfully activated. You can now access all features and participate in quizzes. Thank you for being a valued member of our community.`,
+        'notification',
+      );
+      return {
+        success: true,
+        message: 'User activated successfully',
+        data: null,
+      };
+    } catch (e) {
+      return {
+        success: false,
+        message: e instanceof Error ? e.message : 'An unknown error occurred',
+        data: null,
+      };
+    }
+  }
 }
