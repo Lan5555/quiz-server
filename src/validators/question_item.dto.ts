@@ -2,13 +2,13 @@ import { IsString, IsArray, IsNumber, ArrayNotEmpty } from 'class-validator';
 
 export class QuestionItemDto {
   @IsString()
-  question: string;
+  question!: string;
 
   @IsArray()
   @ArrayNotEmpty()
   @IsString({ each: true })
-  options: string[];
+  options!: string[];
 
   @IsNumber()
-  correct: number;
+  correct!: number;
 }

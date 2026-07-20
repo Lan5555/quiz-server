@@ -12,28 +12,28 @@ import { QuestionItemDto } from './question_item.dto';
 
 export class CreateQuestionDto {
   @IsString()
-  name: string;
+  name!: string;
 
   @IsInt()
-  code: number;
+  code!: number;
 
   @IsArray()
   @ArrayNotEmpty()
   @ValidateNested({ each: true })
   @Type(() => QuestionItemDto)
-  question: QuestionItemDto[];
+  question!: QuestionItemDto[];
 
   @IsNumber()
-  totalQuestions: number;
+  totalQuestions!: number;
 
   @IsBoolean()
-  isDynamic: boolean;
+  isDynamic!: boolean;
 
   @IsInt()
-  dynamicTime: number;
+  dynamicTime!: number;
 }
 
 export class fetchQuestionsDto {
   @IsInt()
-  id: number;
+  id!: number;
 }

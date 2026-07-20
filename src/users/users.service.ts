@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from '../entities/entity';
@@ -5,10 +6,11 @@ import { NetResponse } from '../helpers/types';
 import { PayedDto } from '../validators/shop.dto';
 import { UserDto } from '../validators/user.dto';
 import { Repository } from 'typeorm';
-import { v4 as uuidv4 } from 'uuid';
+// import { v4 as uuidv4 } from 'uuid';
 import { CronJobService } from 'src/cron-job/cron-job.service';
 import { EmailServiceService } from 'src/email-service/email-service.service';
 import { Misc } from 'src/misc/entities/misc.entity';
+import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
 export class UsersService {
@@ -18,6 +20,7 @@ export class UsersService {
     private readonly cronjobService: CronJobService,
     private readonly emailService: EmailServiceService,
     @InjectRepository(Misc) private readonly miscRepository: Repository<Misc>,
+    private readonly jwtService: JwtService,
   ) {}
 
   async saveUserData(userDetails: UserDto): Promise<NetResponse> {
@@ -48,37 +51,54 @@ export class UsersService {
   }
 
   async findUserById(userId: number): Promise<NetResponse> {
-    const user = await this.userRepository.findOneBy({ userId });
+    try {
+      const user = await this.userRepository.findOneBy({ userId });
 
-    if (user) {
+      if (user) {
+        return {
+          success: true,
+          message: 'User found successfully',
+          data: user,
+        };
+      }
+
       return {
-        success: true,
-        message: 'User found successfully',
-        data: user,
+        success: false,
+        message: 'User not found',
+        data: {},
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        message: 'User not found',
+        data: {},
       };
     }
-
-    return {
-      success: false,
-      message: 'User not found',
-      data: {},
-    };
   }
 
   async findUserByName(name: string): Promise<NetResponse> {
-    const user = await this.userRepository.findOneBy({ name });
-    if (user) {
+    try {
+      const user = await this.userRepository.findOneBy({ name });
+      if (user) {
+        return {
+          success: true,
+          message: 'User found successfully',
+          data: user,
+        };
+      } else {
+        return {
+          success: false,
+          message: 'User not found',
+          data: {},
+        };
+      }
+    } catch (e) {
       return {
-        success: true,
-        message: 'User found successfully',
-        data: user,
+        success: false,
+        message: e instanceof Error ? e.message : 'An unknown error occurred',
+        data: {},
       };
     }
-    return {
-      success: false,
-      message: 'User not found',
-      data: {},
-    };
   }
 
   async checkUserCode(email: string, code: string): Promise<NetResponse> {
@@ -122,6 +142,12 @@ export class UsersService {
       },
     );
 
+    const payload = {
+      name: user.name,
+      sub: user.userId,
+    };
+    const token = await this.jwtService.signAsync(payload);
+
     return {
       success: true,
       message: `Welcome ${user.name}`,
@@ -130,7 +156,7 @@ export class UsersService {
         userId: user.userId,
         attempts: newAttempts,
         time: user.time,
-        token: uuidv4(),
+        token: token,
       },
     };
   }
@@ -156,13 +182,18 @@ export class UsersService {
     };
   }
 
-  logInAdmin(password: string): NetResponse {
+  async logInAdmin(password: string): Promise<NetResponse> {
     if (password['password'] == 'zelink123') {
+      const payload = {
+        name: 'Nicholas Johnson',
+        userId: 24,
+      };
+      const token = await this.jwtService.signAsync(payload);
       const dataResponse = {
         name: 'Nicholas Johnson',
         email: 'okekejohnson24@gmail.com',
         level: 3,
-        token: uuidv4(),
+        token: token,
       };
       return {
         success: true,
@@ -262,12 +293,17 @@ export class UsersService {
         data: null,
       };
     } else if (user.email === email && user.codeInfo.code === code) {
+      const payload = {
+        name: user.name,
+        sub: user.userId,
+      };
+      const token = await this.jwtService.signAsync(payload);
       return {
         success: true,
         message: `Welcome back ${user.name}`,
         data: {
           ...user,
-          token: uuidv4(),
+          token: token,
         },
       };
     } else {

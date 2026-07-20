@@ -6,6 +6,7 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Query,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import {
@@ -32,7 +33,7 @@ export class UsersController {
   }
 
   @Post('/api/find-one-user')
-  findOneUser(@Body() body: UserDto) {
+  findOneUser(@Body() body: { userId: number }) {
     return this.userService.findUserById(body.userId);
   }
 
@@ -41,9 +42,9 @@ export class UsersController {
     return this.userService.findAll();
   }
 
-  @Post('/api/find-by-name')
-  findByName(@Body() body: UserDto) {
-    return this.userService.findUserByName(body.name);
+  @Get('/api/search')
+  findByName(@Query('name') name: string) {
+    return this.userService.findUserByName(name);
   }
 
   @Post('/api/save-score')

@@ -8,61 +8,61 @@ import {
 
 export class UserDto {
   @IsEmail()
-  email: string;
+  email!: string;
 
   @IsString()
   @IsOptional()
-  name: string;
+  name!: string;
 
   @IsInt()
   @IsOptional()
-  id: number;
+  id!: number;
 
   @IsInt()
   @IsOptional()
-  userId: number;
+  userId!: number;
 
   @IsString()
   @IsOptional()
   @MinLength(6)
-  code: string;
+  code!: string;
 
   @IsOptional()
-  codeInfo: Record<string, any>;
-
-  @IsInt()
-  @IsOptional()
-  score: number;
+  codeInfo!: Record<string, any>;
 
   @IsInt()
   @IsOptional()
-  time: number;
+  score!: number;
+
+  @IsInt()
+  @IsOptional()
+  time!: number;
 }
 
 export class SaveScoreDto {
   @IsInt()
-  userId: number;
+  userId!: number;
   @IsInt()
-  score: number;
+  score!: number;
 }
 
 export class OneUserDto {
   @IsInt()
-  userId: number;
+  userId!: number;
 }
 
 export class ParameterDto {
   @IsInt()
-  userId: number;
+  userId!: number;
   @IsString()
-  key: 'email' | 'name';
+  key!: 'email' | 'name';
   @IsString()
-  param: string;
+  param!: string;
 }
 
 export class StudentDto {
   @IsEmail()
-  email: string;
+  email!: string;
   @IsString()
-  code: string;
+  code!: string;
 }

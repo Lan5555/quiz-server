@@ -12,6 +12,8 @@ import { CronJobModule } from './cron-job/cron-job.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { EmailServiceModule } from './email-service/email-service.module';
 import { MiscModule } from './misc/misc.module';
+import { ChatModule } from './chat/chat.module';
+import { JwtModule } from '@nestjs/jwt';
 
 @Module({
   imports: [
@@ -22,6 +24,15 @@ import { MiscModule } from './misc/misc.module';
         process.env.NODE_ENV === 'production'
           ? '.env.production'
           : '.env.development',
+    }),
+    JwtModule.registerAsync({
+      global: true,
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        secret: config.get<string>('JWT_SECRET') || 'Lan-Hub-v3',
+        signOptions: { expiresIn: '1h' },
+      }),
     }),
 
     TypeOrmModule.forRootAsync({
@@ -49,6 +60,7 @@ import { MiscModule } from './misc/misc.module';
     CronJobModule,
     EmailServiceModule,
     MiscModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [AppService],
