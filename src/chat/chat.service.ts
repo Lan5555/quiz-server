@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { ChatMessage, RoomMember, Room } from './types/chat.types';
+import { ChatMessage, RoomMember, type Room } from './types/chat.types';
 
 @Injectable()
 export class ChatService {
@@ -19,7 +19,6 @@ export class ChatService {
     }
     return code;
   }
-
   createRoom(input: {
     name: string;
     isGroup: boolean;

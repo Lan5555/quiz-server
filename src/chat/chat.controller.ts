@@ -17,7 +17,6 @@ import { CreateRoomDto } from './dto/chat.dto';
 @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
 export class RoomController {
   constructor(private readonly chatService: ChatService) {}
-
   @Post('/api/rooms')
   createRoom(@Body() dto: CreateRoomDto) {
     const room = this.chatService.createRoom({
