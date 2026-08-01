@@ -24,6 +24,16 @@ export class UsersService {
   ) {}
 
   async saveUserData(userDetails: UserDto): Promise<NetResponse> {
+    const checkedUser = await this.userRepository.findOneBy({
+      userId: userDetails.userId,
+    });
+    if (checkedUser) {
+      return {
+        success: false,
+        message: 'User already exists',
+        data: null,
+      };
+    }
     const user = this.userRepository.create(userDetails);
 
     await this.userRepository.save(user);
