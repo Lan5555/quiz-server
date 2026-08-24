@@ -79,7 +79,11 @@ export class ReviewService {
   }
   async fetchAllReviews(take = 10, skip = 0): Promise<NetResponse> {
     try {
-      const reviewResponse = await this.reviewResponse.find({ take, skip });
+      const reviewResponse = await this.reviewResponse.find({
+        take,
+        skip,
+        order: { id: 'DESC' },
+      });
       if (reviewResponse) {
         return {
           success: true,
