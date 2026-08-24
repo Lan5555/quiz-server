@@ -13,4 +13,8 @@ export class ReviewController {
   fetchReviews(@Query('userId') userId: number) {
     return this.reviewService.fetchReviews(Number(userId));
   }
+  @Get('/api/fetch-all-reviews')
+  fetchAllReviews(@Query('take') take: number, @Query('skip') skip: number) {
+    return this.reviewService.fetchAllReviews(Number(take), Number(skip));
+  }
 }

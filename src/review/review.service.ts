@@ -77,4 +77,28 @@ export class ReviewService {
       data: null,
     };
   }
+  async fetchAllReviews(take = 10, skip = 0): Promise<NetResponse> {
+    try {
+      const reviewResponse = await this.reviewResponse.find({ take, skip });
+      if (reviewResponse) {
+        return {
+          success: true,
+          message: 'Reviews queried successfully',
+          data: reviewResponse,
+        };
+      }
+      return {
+        success: false,
+        message: 'No reviews found',
+        data: null,
+      };
+    } catch (e) {
+      return {
+        success: false,
+        message:
+          'Unable to fetch Reviews' + `${e instanceof Error ? e.message : e}`,
+        data: null,
+      };
+    }
+  }
 }
