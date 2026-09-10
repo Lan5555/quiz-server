@@ -14,6 +14,7 @@ import { EmailServiceModule } from './email-service/email-service.module';
 import { MiscModule } from './misc/misc.module';
 import { ChatModule } from './chat/chat.module';
 import { JwtModule } from '@nestjs/jwt';
+import { GameModule } from './game/game.module';
 
 @Module({
   imports: [
@@ -61,6 +62,7 @@ import { JwtModule } from '@nestjs/jwt';
     EmailServiceModule,
     MiscModule,
     ChatModule,
+    GameModule,
   ],
   controllers: [AppController],
   providers: [AppService],
