@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get } from '@nestjs/common';
 
 import { StoryEngine } from './engines/story.engine';
 
@@ -20,10 +20,5 @@ export class GameController {
         nodes: this.storyEngine.getStory(),
       },
     };
-  }
-  @Post('import')
-  importStory(@Body() body: { nodes: Record<string, unknown> }) {
-    this.storyEngine.replaceNodes(body.nodes);
-    return { ok: true };
   }
 }
