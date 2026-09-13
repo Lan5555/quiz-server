@@ -16,20 +16,24 @@ import {
 } from '../game.types';
 
 const SKILL_DAMAGE: Record<SkillId, [number, number]> = {
-  shadow_strike: [20, 488],
-  blood_rage: [30, 500],
-  fire_burst: [26, 44],
-  void_blast: [214, 46],
+  shadow_strike: [90, 130],
+  blood_rage: [140, 190],
+  fire_burst: [110, 150],
+  void_blast: [120, 165],
 };
 
 const HEAL_AMOUNT: Record<HealId, number> = {
-  minor_heal: 210,
-  major_heal: 415,
+  minor_heal: 120,
+  major_heal: 260,
 };
 
 const BREAK_THRESHOLD = 100;
 const BREAK_PER_DAMAGE = 1.2;
 const BREAK_DECAY_PER_ACTION = 15;
+
+/** Per-battle uses of each ability type, per player. */
+const MAX_SKILL_USES = 6;
+const MAX_HEAL_USES = 6;
 
 function isSkillId(value: CombatVariant | undefined): value is SkillId {
   return (
@@ -62,6 +66,8 @@ export class CombatEngine {
     defenderTeamId: TeamId,
     sourceNodeId?: string,
   ): TeamBattle {
+    this.resetBattleCharges(game);
+
     const battle: TeamBattle = {
       id: crypto.randomUUID(),
       mode: 'team',
@@ -93,6 +99,8 @@ export class CombatEngine {
       phases?: CpuPhase[];
     },
   ): CpuBattle {
+    this.resetBattleCharges(game);
+
     const battle: CpuBattle = {
       id: crypto.randomUUID(),
       mode: 'cpu',
@@ -134,6 +142,8 @@ export class CombatEngine {
       phases?: CpuPhase[];
     },
   ): CpuBattle {
+    this.resetBattleCharges(game);
+
     const battle: CpuBattle = {
       id: crypto.randomUUID(),
       mode: 'cpu',
@@ -160,6 +170,20 @@ export class CombatEngine {
     return battle;
   }
 
+  /**
+   * Gives every player a fresh skill/heal budget. Called the moment a
+   * battle is created so the roster reflects the charges on the first
+   * STATE_SYNC.
+   */
+  private resetBattleCharges(game: GameState) {
+    for (const team of Object.values(game.teams)) {
+      for (const p of team.players) {
+        p.skillCharges = MAX_SKILL_USES;
+        p.healCharges = MAX_HEAL_USES;
+      }
+    }
+  }
+
   /* ------------------------------------------------------------------ */
   /* Player actions                                                      */
   /* ------------------------------------------------------------------ */
@@ -180,6 +204,23 @@ export class CombatEngine {
     }
     if (this.isImmobilized(player)) {
       throw new Error(`${player.name} is immobilized and cannot act.`);
+    }
+
+    // ---- Charge checks -------------------------------------------------
+    if (action === 'skill') {
+      if ((player.skillCharges ?? 0) <= 0) {
+        throw new Error(
+          `${player.name} has no skill uses remaining this battle.`,
+        );
+      }
+    }
+
+    if (action === 'heal') {
+      if ((player.healCharges ?? 0) <= 0) {
+        throw new Error(
+          `${player.name} has no heal uses remaining this battle.`,
+        );
+      }
     }
 
     if (battle.mode === 'team') {
@@ -213,13 +254,21 @@ export class CombatEngine {
           )
         : this.resolveCpuPlayerAction(game, battle, player, action, variant);
 
+    // Only spend the charge if the action actually resolved. If
+    // `resolveTeamAction` threw (bad target, unknown action), the charge
+    // is not consumed.
+    if (action === 'skill') {
+      player.skillCharges = (player.skillCharges ?? 0) - 1;
+    }
+    if (action === 'heal') {
+      player.healCharges = (player.healCharges ?? 0) - 1;
+    }
+
     battle.log.push(message);
 
     if (battle.mode === 'team') {
       this.checkTeamBattleEnd(game, battle);
     } else {
-      // Only check whether the enemy died. Do NOT retaliate here —
-      // the gateway drives that on a delay.
       if (battle.enemyHp === 0) {
         battle.status = 'victory';
         battle.log.push(`${battle.enemyName} has been destroyed.`);
@@ -282,7 +331,7 @@ export class CombatEngine {
   ): string {
     switch (action) {
       case 'attack': {
-        const damage = roll(10, 25);
+        const damage = roll(70, 110);
         battle.enemyHp = Math.max(0, battle.enemyHp - damage);
         return `${player.name} attacked ${battle.enemyName} for ${damage} damage.`;
       }
@@ -322,7 +371,7 @@ export class CombatEngine {
       ? opponents.find((p) => p.id === targetId)
       : undefined;
     const target = requested ?? opponents[roll(0, opponents.length - 1)];
-    const damage = roll(10, 25);
+    const damage = roll(70, 110);
 
     target.hp = Math.max(0, target.hp - damage);
 
@@ -480,21 +529,17 @@ export class CombatEngine {
     if (!battle || battle.mode !== 'team') return;
     if (battle.status !== 'active') return;
 
-    // A fresh break grants the attacker an extra turn.
     if (this.brokeThisAction) {
       this.brokeThisAction = false;
       this.assignFirstAlivePlayer(game, battle, battle.turnTeamId);
       return;
     }
 
-    // Normal alternation.
     battle.turnTeamId =
       battle.turnTeamId === battle.attackerTeamId
         ? battle.defenderTeamId
         : battle.attackerTeamId;
 
-    // If the new side can't act (fully immobilized), flip back so the
-    // other side acts again.
     if (!this.teamCanAct(game, battle.turnTeamId)) {
       battle.turnTeamId =
         battle.turnTeamId === battle.attackerTeamId
@@ -514,30 +559,44 @@ export class CombatEngine {
   /* End-of-battle                                                       */
   /* ------------------------------------------------------------------ */
 
-  // private checkTeamBattleEnd(game: GameState, battle: TeamBattle) {
-  //   if (battle.status !== 'active') return;
-
-  //   const attackerAlive = this.sideHasAlive(game, battle.attackerTeamId);
-  //   const defenderAlive = this.sideHasAlive(game, battle.defenderTeamId);
-
-  //   if (!attackerAlive && !defenderAlive) {
-  //     battle.status = 'defeat';
-  //     battle.log.push('Both sides have fallen.');
-  //     return;
-  //   }
-  //   if (!attackerAlive) {
-  //     battle.status = 'defeat';
-  //     battle.log.push(`${battle.defenderTeamId} stands victorious.`);
-  //     return;
-  //   }
-  //   if (!defenderAlive) {
-  //     battle.status = 'victory';
-  //     battle.log.push(`${battle.attackerTeamId} stands victorious.`);
-  //   }
-  // }
-
   private sideHasAlive(game: GameState, teamId: TeamId) {
     return game.teams[teamId].players.some((p) => p.status === 'alive');
+  }
+
+  private markTeamDefeated(game: GameState, teamId: TeamId) {
+    const team = game.teams[teamId];
+    for (const p of team.players) {
+      if (p.status === 'alive') {
+        p.status = 'defeated';
+        p.hp = 0;
+      }
+    }
+  }
+
+  private checkTeamBattleEnd(game: GameState, battle: TeamBattle) {
+    if (battle.status !== 'active') return;
+
+    const attackerAlive = this.sideHasAlive(game, battle.attackerTeamId);
+    const defenderAlive = this.sideHasAlive(game, battle.defenderTeamId);
+
+    if (!attackerAlive && !defenderAlive) {
+      battle.status = 'defeat';
+      battle.log.push('Both sides have fallen.');
+      this.markTeamDefeated(game, battle.attackerTeamId);
+      this.markTeamDefeated(game, battle.defenderTeamId);
+      return;
+    }
+    if (!attackerAlive) {
+      battle.status = 'defeat';
+      battle.log.push(`${battle.defenderTeamId} stands victorious.`);
+      this.markTeamDefeated(game, battle.attackerTeamId);
+      return;
+    }
+    if (!defenderAlive) {
+      battle.status = 'victory';
+      battle.log.push(`${battle.attackerTeamId} stands victorious.`);
+      this.markTeamDefeated(game, battle.defenderTeamId);
+    }
   }
 
   private assignFirstAlivePlayer(
@@ -582,15 +641,12 @@ export class CombatEngine {
       return;
     }
 
-    // ---- Phase check (boss battles) --------------------------------------
     this.checkBossPhase(battle);
 
-    // ---- Telegraph -------------------------------------------------------
     if (battle.telegraphs && battle.round % 2 === 0) {
       battle.log.push(`${battle.enemyName} sizes up the party...`);
     }
 
-    // ---- Choose an action ------------------------------------------------
     const personality = battle.personality ?? 'aggressive';
     const abilityChance = battle.abilityChance ?? 0.25;
     const signatureEvery = battle.signatureEveryNRounds ?? 0;
@@ -608,7 +664,6 @@ export class CombatEngine {
       this.cpuBasicAttack(game, battle, target, phaseMultiplier);
     }
 
-    // ---- Check victory/defeat --------------------------------------------
     const stillAlive = team.players.filter(
       (p) => p.status === 'alive' && !this.isImmobilized(p),
     );
@@ -618,7 +673,6 @@ export class CombatEngine {
       return;
     }
 
-    // ---- Advance to the next player --------------------------------------
     const currentIndex = stillAlive.findIndex(
       (p) => p.id === battle.activePlayerId,
     );
@@ -641,27 +695,18 @@ export class CombatEngine {
   ): Player {
     switch (personality) {
       case 'aggressive': {
-        // Wound the weakest — best chance to eliminate.
         return alive.reduce((a, b) => (a.hp <= b.hp ? a : b));
       }
 
       case 'strategic': {
-        // Kill the biggest damage threat.
-        // Heuristic: players with fewer HP but still alive are more "dangerous"
-        // in a short fight, but the real threat is the highest-HP one who can
-        // still act. Prefer the highest-HP alive player (likely the carry).
         return alive.reduce((a, b) => (a.hp >= b.hp ? a : b));
       }
 
       case 'defensive': {
-        // Prefer whoever healed last round — approximated by highest HP.
-        // In practice you'd track a `lastAction` field; here we pick the
-        // healthiest ally so we suppress their sustain.
         return alive.reduce((a, b) => (a.hp >= b.hp ? a : b));
       }
 
       case 'chaotic': {
-        // Weighted random: wounded players are more likely to be picked.
         const weights = alive.map((p) => 1 + (1 - p.hp / p.maxHp) * 3);
         const total = weights.reduce((a, b) => a + b, 0);
         let pick = Math.random() * total;
@@ -673,7 +718,6 @@ export class CombatEngine {
       }
 
       case 'boss': {
-        // Boss prioritizes whoever is broken or lowest HP.
         const broken = alive.find((p) => this.isImmobilized(p));
         if (broken) return broken;
         return alive.reduce((a, b) => (a.hp <= b.hp ? a : b));
@@ -729,7 +773,6 @@ export class CombatEngine {
     phaseMultiplier: number,
     personality: CpuPersonality,
   ) {
-    // Small pool of abilities the CPU can choose from. Expand as you like.
     const abilities = [
       {
         name: 'Rend',
@@ -748,7 +791,6 @@ export class CombatEngine {
       {
         name: 'Howl',
         run: () => {
-          // Buff itself: raises future damage for a couple rounds.
           battle.enemyAttack = Math.round(battle.enemyAttack * 1.15);
           battle.log.push(
             `${battle.enemyName} lets out a Howl. Its attacks grow fiercer.`,
@@ -758,7 +800,6 @@ export class CombatEngine {
       {
         name: 'Sweep',
         run: () => {
-          // AoE: hits everyone for a smaller amount.
           const team = game.teams[battle.attackerTeamId];
           for (const p of team.players) {
             if (p.status !== 'alive') continue;
@@ -774,10 +815,9 @@ export class CombatEngine {
       },
     ];
 
-    // Bosses and strategic enemies prefer Howl when low; others pick randomly.
     const pick =
       personality === 'boss' && battle.enemyHp < battle.enemyMaxHp * 0.4
-        ? abilities[1] // Howl to recover
+        ? abilities[1]
         : abilities[roll(0, abilities.length - 1)];
 
     pick.run();
@@ -844,41 +884,5 @@ export class CombatEngine {
   private currentPhaseMultiplier(battle: CpuBattle): number {
     if (!battle.phases || battle.phaseIndex === undefined) return 1;
     return battle.phases[battle.phaseIndex]?.attackMultiplier ?? 1;
-  }
-
-  private markTeamDefeated(game: GameState, teamId: TeamId) {
-    const team = game.teams[teamId];
-    for (const p of team.players) {
-      if (p.status === 'alive') {
-        p.status = 'defeated';
-        p.hp = 0;
-      }
-    }
-  }
-
-  private checkTeamBattleEnd(game: GameState, battle: TeamBattle) {
-    if (battle.status !== 'active') return;
-
-    const attackerAlive = this.sideHasAlive(game, battle.attackerTeamId);
-    const defenderAlive = this.sideHasAlive(game, battle.defenderTeamId);
-
-    if (!attackerAlive && !defenderAlive) {
-      battle.status = 'defeat';
-      battle.log.push('Both sides have fallen.');
-      this.markTeamDefeated(game, battle.attackerTeamId);
-      this.markTeamDefeated(game, battle.defenderTeamId);
-      return;
-    }
-    if (!attackerAlive) {
-      battle.status = 'defeat';
-      battle.log.push(`${battle.defenderTeamId} stands victorious.`);
-      this.markTeamDefeated(game, battle.attackerTeamId);
-      return;
-    }
-    if (!defenderAlive) {
-      battle.status = 'victory';
-      battle.log.push(`${battle.attackerTeamId} stands victorious.`);
-      this.markTeamDefeated(game, battle.defenderTeamId);
-    }
   }
 }
