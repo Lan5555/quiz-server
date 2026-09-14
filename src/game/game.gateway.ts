@@ -170,6 +170,9 @@ export class GameGateway {
           this.activeCutsceneId = null;
         }
         break;
+      case 'CREDITS_DONE':
+        this.handleCreditsDone(client);
+        break;
       default:
         this.sendError(client.socket, 'Unknown game event.');
     }
@@ -675,6 +678,25 @@ export class GameGateway {
       return;
     }
 
+    if (choice.result === 'credits') {
+      game.phase = 'credits';
+      game.creditsStartedAt = Date.now();
+      game.creditsDurationMs = 68000;
+
+      this.clearStoryTimeout();
+      this.clearRoundTimeout();
+
+      this.broadcastEvent(GLOBAL_ROOM, {
+        type: 'CREDITS',
+        durationMs: game.creditsDurationMs,
+        startedAt: game.creditsStartedAt,
+      });
+
+      this.broadcastState();
+      this.broadcastRoomList();
+      return;
+    }
+
     this.broadcastStory();
     this.broadcastState();
     this.broadcastRoomList();
@@ -848,46 +870,170 @@ export class GameGateway {
     nextNodeId?: string,
     onBattle?: Cutscene,
   ) {
-    const random = Math.random();
+    /* ---------------------------------------------------------------- */
+    /* 1. Team snapshot                                                   */
+    /* ---------------------------------------------------------------- */
 
-    if (random < 0.5) {
+    const team = game.teams[game.currentTeamId];
+    const alive = team.players.filter((p) => p.status === 'alive');
+    const aliveCount = alive.length;
+    const avgHp =
+      alive.length > 0
+        ? alive.reduce((sum, p) => sum + p.hp, 0) / alive.length
+        : 0;
+
+    /* ---------------------------------------------------------------- */
+    /* 2. Encounter chance — driven by team state only                    */
+    /* ---------------------------------------------------------------- */
+
+    // How beaten up the team is. Uses max HP if the player has it,
+    // otherwise falls back to 200.
+    const sampleMaxHp = alive[0]?.maxHp ?? 200;
+    const damageRatio =
+      sampleMaxHp > 0 ? 1 - Math.min(1, avgHp / sampleMaxHp) : 0;
+
+    // Fewer players alive → more likely to be ambushed.
+    const sizeFactor = aliveCount <= 1 ? 0.25 : aliveCount === 2 ? 0.1 : 0;
+
+    const encounterChance = 0.4 + damageRatio * 0.2 + sizeFactor;
+
+    if (Math.random() > encounterChance) {
       this.advanceActivePlayer(game);
       return;
     }
 
+    /* ---------------------------------------------------------------- */
+    /* 3. Tier — driven by team strength                                  */
+    /* ---------------------------------------------------------------- */
+
+    const teamStrength = aliveCount * 40 + avgHp * 0.6;
+
+    const tier: 'low' | 'mid' | 'elite' =
+      teamStrength > 320 ? 'elite' : teamStrength > 180 ? 'mid' : 'low';
+
+    /* ---------------------------------------------------------------- */
+    /* 4. Weighted pools per tier                                         */
+    /* ---------------------------------------------------------------- */
+
+    const ENCOUNTER_POOL = {
+      low: [
+        {
+          name: 'THE SHADOW',
+          hp: 900,
+          attack: 12,
+          personality: 'chaotic' as const,
+          abilityChance: 0.15,
+          signatureEveryNRounds: 0,
+          weight: 60,
+        },
+        {
+          name: 'A HOLLOW WRAITH',
+          hp: 1000,
+          attack: 14,
+          personality: 'aggressive' as const,
+          abilityChance: 0.25,
+          signatureEveryNRounds: 4,
+          signatureMultiplier: 1.5,
+          weight: 40,
+        },
+      ],
+      mid: [
+        {
+          name: 'THE PALE HUNTER',
+          hp: 1200,
+          attack: 16,
+          personality: 'strategic' as const,
+          abilityChance: 0.3,
+          signatureEveryNRounds: 3,
+          signatureMultiplier: 1.7,
+          telegraphs: true,
+          weight: 45,
+        },
+        {
+          name: 'THE ASHEN CHOIR',
+          hp: 1300,
+          attack: 15,
+          personality: 'chaotic' as const,
+          abilityChance: 0.4,
+          signatureEveryNRounds: 3,
+          signatureMultiplier: 1.6,
+          weight: 35,
+        },
+        {
+          name: 'WOLF OF THE HOLLOW',
+          hp: 1100,
+          attack: 18,
+          personality: 'aggressive' as const,
+          abilityChance: 0.2,
+          signatureEveryNRounds: 5,
+          signatureMultiplier: 2.0,
+          weight: 20,
+        },
+      ],
+      elite: [
+        {
+          name: 'THE HOLLOWED KING',
+          hp: 1600,
+          attack: 20,
+          personality: 'boss' as const,
+          abilityChance: 0.45,
+          signatureEveryNRounds: 3,
+          signatureMultiplier: 1.8,
+          telegraphs: true,
+          weight: 30,
+        },
+        {
+          name: 'SIR CULLEN, THE LAST KNIGHT',
+          hp: 1500,
+          attack: 19,
+          personality: 'strategic' as const,
+          abilityChance: 0.4,
+          signatureEveryNRounds: 2,
+          signatureMultiplier: 1.9,
+          telegraphs: true,
+          weight: 30,
+        },
+        {
+          name: 'THE FACELESS MOTHER',
+          hp: 1700,
+          attack: 21,
+          personality: 'chaotic' as const,
+          abilityChance: 0.5,
+          signatureEveryNRounds: 4,
+          signatureMultiplier: 2.1,
+          weight: 25,
+        },
+        {
+          name: 'THE THING IN THE BELL',
+          hp: 1400,
+          attack: 23,
+          personality: 'aggressive' as const,
+          abilityChance: 0.35,
+          signatureEveryNRounds: 3,
+          signatureMultiplier: 2.0,
+          weight: 15,
+        },
+      ],
+    };
+
+    const pool = ENCOUNTER_POOL[tier] as Array<{
+      name: string;
+      hp: number;
+      attack: number;
+      personality: 'aggressive' | 'chaotic' | 'strategic' | 'boss';
+      abilityChance: number;
+      signatureEveryNRounds: number;
+      signatureMultiplier?: number;
+      telegraphs?: boolean;
+      weight: number;
+    }>;
+
+    const encounter = this.weightedPick(pool);
+    /* ---------------------------------------------------------------- */
+    /* 5. Start the battle                                                */
+    /* ---------------------------------------------------------------- */
+
     game.phase = 'battle';
-
-    const encounters = [
-      {
-        name: 'THE SHADOW',
-        hp: 80,
-        attack: 14,
-        personality: 'chaotic' as const,
-        abilityChance: 0.15,
-        signatureEveryNRounds: 0,
-      },
-      {
-        name: 'A HOLLOW WRAITH',
-        hp: 100,
-        attack: 16,
-        personality: 'aggressive' as const,
-        abilityChance: 0.25,
-        signatureEveryNRounds: 4,
-        signatureMultiplier: 1.5,
-      },
-      {
-        name: 'THE PALE HUNTER',
-        hp: 120,
-        attack: 18,
-        personality: 'strategic' as const,
-        abilityChance: 0.3,
-        signatureEveryNRounds: 3,
-        signatureMultiplier: 1.7,
-        telegraphs: true,
-      },
-    ];
-
-    const encounter = encounters[Math.floor(Math.random() * encounters.length)];
 
     game.battle = this.combatEngine.createCpuBattle(
       game,
@@ -909,6 +1055,9 @@ export class GameGateway {
       game.battle.queuedActions = [];
       game.battle.readyPlayerIds = [];
       game.battle.intro = onBattle;
+
+      game.battle.log.push(`${encounter.name} emerges from the Highlands.`);
+
       this.playCutscene(onBattle, 'battle', false);
     }
 
@@ -916,6 +1065,15 @@ export class GameGateway {
     this.startRoundTimeout(game);
   }
 
+  private weightedPick<T extends { weight: number }>(pool: T[]): T {
+    const total = pool.reduce((sum, item) => sum + item.weight, 0);
+    let r = Math.random() * total;
+    for (const item of pool) {
+      r -= item.weight;
+      if (r <= 0) return item;
+    }
+    return pool[0];
+  }
   /* ================================================================== */
   /* Combat queue                                                        */
   /* ================================================================== */
@@ -1394,5 +1552,16 @@ export class GameGateway {
         client.socket.emit('message', JSON.stringify(event));
       }
     }
+  }
+  private handleCreditsDone(client: ConnectedClient) {
+    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    if (!game) return;
+
+    game.phase = 'waiting';
+    game.currentNodeId = 'start';
+    game.creditsStartedAt = undefined;
+    game.creditsDurationMs = undefined;
+
+    this.broadcastState();
   }
 }

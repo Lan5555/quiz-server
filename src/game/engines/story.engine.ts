@@ -2162,7 +2162,13 @@ export class StoryEngine {
         ],
       },
 
-      choices: [],
+      choices: [
+        {
+          id: 'finish',
+          text: 'Finish',
+          result: 'credits',
+        },
+      ],
     },
 
     /* ================================================================ */

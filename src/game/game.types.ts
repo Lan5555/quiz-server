@@ -15,7 +15,12 @@ export type CombatVariant = SkillId | HealId;
 
 export type PlayerStatus = 'alive' | 'eliminated' | 'defeated' | 'spectator';
 
-export type ChoiceResult = 'safe' | 'battle' | 'random' | 'elimination';
+export type ChoiceResult =
+  | 'safe'
+  | 'battle'
+  | 'random'
+  | 'elimination'
+  | 'credits';
 
 export type AdminRole = 'executioner' | 'chronicler' | 'scouter';
 export type TeamCaps = Partial<Record<TeamId, number>>;
@@ -101,7 +106,13 @@ export interface StoryNode {
 
 //   log: string[];
 // }
-type GamePhase = 'waiting' | 'story' | 'combat' | 'ended' | 'battle';
+type GamePhase =
+  | 'waiting'
+  | 'story'
+  | 'combat'
+  | 'ended'
+  | 'battle'
+  | 'credits';
 export interface GameState {
   roomCode: string;
   phase: GamePhase;
@@ -116,6 +127,8 @@ export interface GameState {
   pendingNextNodeId?: string;
   /** The specific player whose turn it is within the active team. */
   activePlayerId?: string;
+  creditsStartedAt?: number; // optional, useful for syncing the scroll
+  creditsDurationMs?: number; // optional
 }
 
 export type GameEvent =
@@ -241,7 +254,9 @@ export type GameEvent =
       /** Total players expected this round. */
       expected: number;
     }
-  | { type: 'ROUND_TIMER'; remainingMs: number };
+  | { type: 'ROUND_TIMER'; remainingMs: number }
+  | { type: 'CREDITS'; durationMs?: number; startedAt?: number }
+  | { type: 'CREDITS_DONE' };
 
 interface BattleBase {
   id: string;

@@ -331,7 +331,7 @@ export class CombatEngine {
   ): string {
     switch (action) {
       case 'attack': {
-        const damage = roll(70, 110);
+        const damage = roll(40, 70);
         battle.enemyHp = Math.max(0, battle.enemyHp - damage);
         return `${player.name} attacked ${battle.enemyName} for ${damage} damage.`;
       }
@@ -371,7 +371,7 @@ export class CombatEngine {
       ? opponents.find((p) => p.id === targetId)
       : undefined;
     const target = requested ?? opponents[roll(0, opponents.length - 1)];
-    const damage = roll(70, 110);
+    const damage = roll(40, 70);
 
     target.hp = Math.max(0, target.hp - damage);
 
@@ -773,52 +773,174 @@ export class CombatEngine {
     phaseMultiplier: number,
     personality: CpuPersonality,
   ) {
+    const aliveTeam = game.teams[battle.attackerTeamId].players.filter(
+      (p) => p.status === 'alive',
+    );
+    const aliveCount = aliveTeam.length;
+
+    // Enrage when the boss drops below 40% HP.
+    const hpRatio =
+      battle.enemyMaxHp > 0 ? battle.enemyHp / battle.enemyMaxHp : 1;
+    const enraged = personality === 'boss' && hpRatio < 0.4;
+
+    // Team-size pressure: enemy hits harder the more players are alive,
+    // so 4v1 fights don't trivialize the boss. Caps at +45%.
+    const pressure = Math.min(1.45, 1 + (aliveCount - 1) * 0.15);
+
+    // Enrage adds another +25% on top of pressure.
+    const enrageMult = enraged ? 1.25 : 1;
+
+    // Total multiplier on every damaging ability this round.
+    const mult = phaseMultiplier * pressure * enrageMult;
+
+    /**
+     * Roll damage in the given range, apply the round multiplier,
+     * and return the final integer.
+     */
+    const dmgRoll = (min: number, max: number): number =>
+      Math.max(1, Math.round(roll(min, max) * mult));
+
+    /**
+     * Apply damage to a single target with crit + death handling.
+     * Returns the actual damage dealt (0 if already dead).
+     */
+    const hit = (
+      p: Player,
+      rawDmg: number,
+    ): { dealt: number; crit: boolean } => {
+      if (p.status !== 'alive') return { dealt: 0, crit: false };
+
+      // 12% crit chance, 1.75x damage.
+      const crit = Math.random() < 0.12;
+      const dmg = Math.round(rawDmg * (crit ? 1.75 : 1));
+
+      p.hp = Math.max(0, p.hp - dmg);
+
+      if (p.hp === 0) {
+        p.status = 'eliminated';
+        battle.log.push(
+          crit
+            ? `The blow is critical — ${p.name} falls.`
+            : `${p.name} has fallen.`,
+        );
+      }
+
+      return { dealt: dmg, crit };
+    };
+
+    // ------------------------------------------------------------------
+    // Ability set
+    // ------------------------------------------------------------------
+
     const abilities = [
       {
+        id: 'rend',
         name: 'Rend',
+        // Single-target heavy hit.
         run: () => {
-          const dmg = Math.round(roll(14, 22) * phaseMultiplier);
-          target.hp = Math.max(0, target.hp - dmg);
+          const raw = dmgRoll(14, 22);
+          const { dealt, crit } = hit(target, raw);
           battle.log.push(
-            `${battle.enemyName} uses Rend on ${target.name} for ${dmg} damage.`,
+            crit
+              ? `${battle.enemyName} Rends ${target.name} — CRITICAL for ${dealt} damage.`
+              : `${battle.enemyName} uses Rend on ${target.name} for ${dealt} damage.`,
           );
-          if (target.hp === 0) {
-            target.status = 'eliminated';
-            battle.log.push(`${target.name} has fallen.`);
-          }
         },
       },
       {
+        id: 'howl',
         name: 'Howl',
+        // Buff the enemy's attack. Cannot crit, does not deal damage.
         run: () => {
-          battle.enemyAttack = Math.round(battle.enemyAttack * 1.15);
+          const gain = enraged ? 0.25 : 0.15;
+          battle.enemyAttack = Math.round(battle.enemyAttack * (1 + gain));
           battle.log.push(
-            `${battle.enemyName} lets out a Howl. Its attacks grow fiercer.`,
+            enraged
+              ? `${battle.enemyName} howls in fury. Its attacks swell with rage.`
+              : `${battle.enemyName} lets out a Howl. Its attacks grow fiercer.`,
           );
         },
       },
       {
+        id: 'sweep',
         name: 'Sweep',
+        // AoE — small damage to everyone alive.
         run: () => {
-          const team = game.teams[battle.attackerTeamId];
-          for (const p of team.players) {
-            if (p.status !== 'alive') continue;
-            const dmg = Math.round(roll(4, 9) * phaseMultiplier);
-            p.hp = Math.max(0, p.hp - dmg);
-            if (p.hp === 0) {
-              p.status = 'eliminated';
-              battle.log.push(`${p.name} is struck down by the Sweep.`);
-            }
+          const totalHit = aliveCount;
+          if (totalHit === 0) return;
+
+          let anyCrit = false;
+          let totalDealt = 0;
+
+          for (const p of aliveTeam) {
+            const raw = dmgRoll(4, 9);
+            const { dealt, crit } = hit(p, raw);
+            if (crit) anyCrit = true;
+            totalDealt += dealt;
           }
-          battle.log.push(`${battle.enemyName} sweeps across the whole team.`);
+
+          battle.log.push(
+            anyCrit
+              ? `${battle.enemyName} Sweeps the team. A critical cut lands.`
+              : `${battle.enemyName} sweeps across the whole team for ${totalDealt} total damage.`,
+          );
+        },
+      },
+      {
+        id: 'crush',
+        name: 'Crush',
+        // Late-fight heavy AoE, only unlocked at round 4+ or when enraged.
+        minRound: 4,
+        run: () => {
+          const raw = dmgRoll(10, 16);
+          let totalDealt = 0;
+
+          for (const p of aliveTeam) {
+            const { dealt } = hit(p, raw);
+            totalDealt += dealt;
+          }
+
+          battle.log.push(
+            `${battle.enemyName} brings down Ruin. The team is crushed for ${totalDealt} total damage.`,
+          );
         },
       },
     ];
 
-    const pick =
-      personality === 'boss' && battle.enemyHp < battle.enemyMaxHp * 0.4
-        ? abilities[1]
-        : abilities[roll(0, abilities.length - 1)];
+    // ------------------------------------------------------------------
+    // Move selection
+    // ------------------------------------------------------------------
+
+    const round = battle.round ?? 1;
+
+    // Filter out locked abilities.
+    const pool = abilities.filter((a) => (a.minRound ?? 1) <= round);
+
+    let pick: (typeof abilities)[number];
+
+    if (enraged) {
+      // Enraged bosses alternate between Crush and Rend with a
+      // sprinkle of Howl to keep the pressure up.
+      const rollEnraged = Math.random();
+      if (rollEnraged < 0.5) pick = abilities.find((a) => a.id === 'crush')!;
+      else if (rollEnraged < 0.85)
+        pick = abilities.find((a) => a.id === 'rend')!;
+      else pick = abilities.find((a) => a.id === 'howl')!;
+    } else if (personality === 'boss') {
+      // Bosses telegraph their next move — 25% chance to Howl, otherwise
+      // weighted toward Rend and Sweep.
+      const r = Math.random();
+      if (r < 0.25) pick = abilities.find((a) => a.id === 'howl')!;
+      else if (r < 0.65) pick = abilities.find((a) => a.id === 'rend')!;
+      else if (r < 0.9) pick = abilities.find((a) => a.id === 'sweep')!;
+      else pick = abilities.find((a) => a.id === 'crush')!;
+    } else {
+      // Regular enemies: mostly Rend, occasional Sweep, rare Howl.
+      const r = Math.random();
+      if (r < 0.6) pick = abilities.find((a) => a.id === 'rend')!;
+      else if (r < 0.85) pick = abilities.find((a) => a.id === 'sweep')!;
+      else pick = abilities.find((a) => a.id === 'howl')!;
+    }
 
     pick.run();
   }
