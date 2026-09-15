@@ -373,7 +373,7 @@ export class StoryEngine {
           enemyName: 'ECHO BEAST',
           enemyHp: 2800,
           enemyMaxHp: 2800,
-          enemyAttack: 140,
+          enemyAttack: 110,
           enemyAbilities: ['rend', 'sweep'],
 
           onBattle: {
@@ -773,7 +773,7 @@ export class StoryEngine {
           enemyName: 'THE BELL KEEPER',
           enemyHp: 3400,
           enemyMaxHp: 3400,
-          enemyAttack: 150,
+          enemyAttack: 110,
           enemyAbilities: ['rend', 'sweep', 'mend', 'howl'],
         },
         {
@@ -842,7 +842,7 @@ export class StoryEngine {
           enemyName: 'BLOOD HUNTERS',
           enemyHp: 3600,
           enemyMaxHp: 3600,
-          enemyAttack: 160,
+          enemyAttack: 110,
           enemyAbilities: ['rend', 'sweep', 'drain'],
         },
         {
@@ -936,7 +936,7 @@ export class StoryEngine {
           enemyName: 'THE REMNANT',
           enemyHp: 3800,
           enemyMaxHp: 3800,
-          enemyAttack: 170,
+          enemyAttack: 100,
           enemyAbilities: ['rend', 'sweep', 'mend', 'drain'],
         },
         {
@@ -1233,7 +1233,7 @@ export class StoryEngine {
           enemyName: 'HOLLOW KNIGHTS',
           enemyHp: 4400,
           enemyMaxHp: 4400,
-          enemyAttack: 190,
+          enemyAttack: 120,
           enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend'],
           enemyPhases: [
             {
@@ -1807,7 +1807,7 @@ export class StoryEngine {
           enemyName: 'NICHOLAS JOHNSON',
           enemyHp: 5200,
           enemyMaxHp: 5200,
-          enemyAttack: 250,
+          enemyAttack: 200,
           enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
           enemyPhases: [
             {
@@ -1833,7 +1833,7 @@ export class StoryEngine {
           enemyName: 'NICHOLAS JOHNSON',
           enemyHp: 5200,
           enemyMaxHp: 5200,
-          enemyAttack: 260,
+          enemyAttack: 210,
           enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
           enemyPhases: [
             {
@@ -1934,7 +1934,7 @@ export class StoryEngine {
           enemyName: 'NICHOLAS JOHNSON',
           enemyHp: 6400,
           enemyMaxHp: 6400,
-          enemyAttack: 270,
+          enemyAttack: 230,
           enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
           enemyPhases: [
             {
@@ -2099,7 +2099,7 @@ export class StoryEngine {
           enemyName: 'NICHOLAS JOHNSON — FINAL FORM',
           enemyHp: 7200,
           enemyMaxHp: 7200,
-          enemyAttack: 300,
+          enemyAttack: 280,
           enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
           enemyPhases: [
             {
@@ -2159,7 +2159,7 @@ export class StoryEngine {
           enemyName: 'NICHOLAS JOHNSON — FINAL FORM',
           enemyHp: 7200,
           enemyMaxHp: 7200,
-          enemyAttack: 300,
+          enemyAttack: 250,
           enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
           enemyPhases: [
             {
@@ -2189,7 +2189,7 @@ export class StoryEngine {
           enemyName: 'NICHOLAS JOHNSON — FINAL FORM',
           enemyHp: 7200,
           enemyMaxHp: 7200,
-          enemyAttack: 300,
+          enemyAttack: 250,
           enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
           enemyPhases: [
             {

@@ -56,7 +56,7 @@ interface EnemyConfig {
 const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
   'ECHO BEAST': {
     hp: 2800,
-    attack: 140,
+    attack: 110,
     personality: 'chaotic',
     abilityChance: 0.35,
     signatureEveryNRounds: 4,
@@ -65,7 +65,7 @@ const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
   },
   'GATE WARDEN': {
     hp: 3200,
-    attack: 140,
+    attack: 100,
     personality: 'boss',
     abilityChance: 0.45,
     signatureEveryNRounds: 3,
@@ -88,7 +88,7 @@ const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
   },
   'THE BELL KEEPER': {
     hp: 3400,
-    attack: 150,
+    attack: 105,
     personality: 'strategic',
     abilityChance: 0.35,
     signatureEveryNRounds: 3,
@@ -98,7 +98,7 @@ const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
   },
   'BLOOD HUNTERS': {
     hp: 3600,
-    attack: 160,
+    attack: 110,
     personality: 'aggressive',
     abilityChance: 0.35,
     signatureEveryNRounds: 4,
@@ -107,7 +107,7 @@ const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
   },
   'THE REMNANT': {
     hp: 3800,
-    attack: 170,
+    attack: 110,
     personality: 'strategic',
     abilityChance: 0.4,
     signatureEveryNRounds: 3,
@@ -117,7 +117,7 @@ const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
   },
   'RAVENS vs DRAGONS': {
     hp: 3800,
-    attack: 160,
+    attack: 110,
     personality: 'strategic',
     abilityChance: 0.4,
     signatureEveryNRounds: 3,
@@ -127,7 +127,7 @@ const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
   },
   'HOLLOW KNIGHTS': {
     hp: 4400,
-    attack: 190,
+    attack: 110,
     personality: 'boss',
     abilityChance: 0.45,
     signatureEveryNRounds: 3,
@@ -145,7 +145,7 @@ const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
   },
   'NICHOLAS JOHNSON': {
     hp: 5200,
-    attack: 250,
+    attack: 200,
     personality: 'boss',
     abilityChance: 0.5,
     signatureEveryNRounds: 3,
@@ -806,6 +806,16 @@ export class GameGateway {
     game.phase = 'ended';
     this.clearRoundTimeout();
     this.clearStoryTimeout();
+    // this.broadcastEvent(GLOBAL_ROOM, {
+    //   type: 'GAME_OVER',
+    //   message: 'The mountain keeps its memory.',
+    //   restartInMs: 15_000,
+    // });
+
+    // Give players 15 seconds to see the banner, then restart.
+    setTimeout(() => {
+      void this.restartGame();
+    }, 15_000);
     this.broadcastState();
   }
 
@@ -1009,7 +1019,7 @@ export class GameGateway {
           choice.enemyHp ?? 1200,
           choice.enemyMaxHp ?? choice.enemyHp ?? 1200,
           {
-            attack: choice.enemyAttack ?? 200,
+            attack: choice.enemyAttack ?? 100,
             personality: 'aggressive',
             abilityChance: 0.35,
             signatureEveryNRounds: 4,
@@ -1782,5 +1792,58 @@ export class GameGateway {
     game.lastActivePlayerId = undefined;
 
     this.broadcastState();
+  }
+
+  private restartGame() {
+    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    if (!game) return;
+
+    this.logger.log('Restarting the Highlands');
+
+    // Reset every team.
+    for (const teamId of Object.keys(game.teams) as TeamId[]) {
+      const team = game.teams[teamId];
+      for (const player of team.players) {
+        player.hp = player.maxHp;
+        player.status = 'alive';
+        player.ready = false;
+        player.breakMeter = 0;
+        player.statusEffects = [];
+        player.skillCharges = undefined;
+        player.healCharges = undefined;
+      }
+    }
+
+    // Reset rotation state.
+    game.playerRotation = {};
+    game.lastActivePlayerId = undefined;
+
+    // Reset the story and battle.
+    game.phase = 'waiting';
+    game.currentNodeId = 'start';
+    game.currentTeamId = 'ravens';
+    game.activePlayerId = undefined;
+    game.battle = undefined;
+    game.pendingNextNodeId = undefined;
+    game.events = [];
+    game.creditsStartedAt = undefined;
+    game.creditsDurationMs = undefined;
+
+    // Clear per-room caches.
+    this.seenCutscenes.clear();
+    this.lastCutsceneNodeId = null;
+    this.activeCutsceneId = null;
+    // this.resolvedRound = false;
+    // this.lastRoundTimerBroadcast = 0;
+
+    // // Tell clients to reset their view.
+    // this.broadcastEvent(GLOBAL_ROOM, {
+    //   type: 'RESTART',
+    //   roomCode: game.roomCode,
+    // });
+
+    this.broadcastStory();
+    this.broadcastState();
+    this.broadcastRoomList();
   }
 }

@@ -47,15 +47,15 @@ const MAX_HEAL_USES = 6;
 
 /** Enemy attack ramp — +3% per round, capped at +50%. */
 const ENEMY_ROUND_RAMP = 0.03;
-const ENEMY_ROUND_RAMP_CAP = 1.5;
+const ENEMY_ROUND_RAMP_CAP = 1.2;
 
 /** Enemy team-size pressure — +20% per extra player, capped at +60%. */
 const ENEMY_PRESSURE_PER_PLAYER = 0.2;
-const ENEMY_PRESSURE_CAP = 1.6;
+const ENEMY_PRESSURE_CAP = 1.25;
 
 /** Enrage — triggers at 50% HP, hits 50% harder. */
 const ENRAGE_THRESHOLD = 0.5;
-const ENRAGE_MULT = 1.5;
+const ENRAGE_MULT = 1.25;
 
 /** Howl is additive so it can't snowball in long fights. */
 const HOWL_GAIN_NORMAL = 20;
@@ -67,7 +67,7 @@ const MEND_RATIO_ENRAGED = 0.12; // 12% when enraged
 const DRAIN_RATIO = 0.5; // drains 50% of damage dealt as HP
 
 /** Player damage — scaled to 1000 HP pool. */
-const PLAYER_ATTACK = [140, 220] as const;
+const PLAYER_ATTACK = [90, 120] as const;
 
 function isSkillId(value: CombatVariant | undefined): value is SkillId {
   return (
@@ -780,8 +780,8 @@ export class CombatEngine {
     );
 
     const base = roll(
-      Math.max(1, battle.enemyAttack - 40),
-      battle.enemyAttack + 40,
+      Math.max(1, battle.enemyAttack - 15),
+      battle.enemyAttack + 15,
     );
     const enemyDmg = Math.round(base * phaseMultiplier * roundMult);
 
