@@ -70,6 +70,8 @@ export interface StoryChoice {
   enemyHp?: number;
   enemyMaxHp?: number;
   enemyAttack?: number;
+  enemyAbilities?: CpuAbilityId[];
+  enemyPhases?: CpuPhase[];
 }
 
 export interface StoryNode {
@@ -129,7 +131,16 @@ export interface GameState {
   activePlayerId?: string;
   creditsStartedAt?: number; // optional, useful for syncing the scroll
   creditsDurationMs?: number; // optional
+  playerRotation?: Partial<Record<TeamId, number>>;
+  lastActivePlayerId?: string;
 }
+export type CpuAbilityId =
+  | 'rend'
+  | 'howl'
+  | 'sweep'
+  | 'crush'
+  | 'mend'
+  | 'drain';
 
 export type GameEvent =
   | {
@@ -402,6 +413,7 @@ export interface CpuBattle {
   phases?: CpuPhase[];
   /** Which phase the boss is currently in. */
   phaseIndex?: number;
+  abilities?: CpuAbilityId[];
 }
 
 export interface CpuPhase {

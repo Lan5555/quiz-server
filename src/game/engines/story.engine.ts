@@ -86,10 +86,6 @@ export class StoryEngine {
       ],
     },
 
-    /* ================================================================ */
-    /* THE GATE — PvP #1                                                */
-    /* ================================================================ */
-
     gate: {
       id: 'gate',
       title: 'THE GATE',
@@ -181,10 +177,6 @@ export class StoryEngine {
         },
       ],
     },
-
-    /* ================================================================ */
-    /* THE CATHEDRAL                                                    */
-    /* ================================================================ */
 
     cathedral: {
       id: 'cathedral',
@@ -278,10 +270,6 @@ export class StoryEngine {
       ],
     },
 
-    /* ================================================================ */
-    /* THE ABYSS                                                        */
-    /* ================================================================ */
-
     cliff: {
       id: 'cliff',
       title: 'THE ABYSS',
@@ -336,10 +324,7 @@ export class StoryEngine {
       ],
     },
 
-    /* ================================================================ */
-    /* THE ECHO                                                         */
-    /* ================================================================ */
-
+    /* Echo Beast — damage race, no healing */
     echo: {
       id: 'echo',
       title: 'THE ECHO',
@@ -386,9 +371,10 @@ export class StoryEngine {
           result: 'battle',
           nextNodeId: 'memory',
           enemyName: 'ECHO BEAST',
-          enemyHp: 1000,
-          enemyMaxHp: 1000,
-          enemyAttack: 16,
+          enemyHp: 2800,
+          enemyMaxHp: 2800,
+          enemyAttack: 140,
+          enemyAbilities: ['rend', 'sweep'],
 
           onBattle: {
             id: 'echo-beast',
@@ -426,10 +412,6 @@ export class StoryEngine {
         },
       ],
     },
-
-    /* ================================================================ */
-    /* THE MEMORY                                                       */
-    /* ================================================================ */
 
     memory: {
       id: 'memory',
@@ -520,7 +502,7 @@ export class StoryEngine {
             id: 'burning-01',
             speaker: 'Nicholas Johnson',
             text: 'You should have left the past alone.',
-            duration: 3800,
+            duration: 4800,
             tone: 'sad',
             voice: '/audio/vo/nicholas_house_01.mp3',
           },
@@ -556,10 +538,6 @@ export class StoryEngine {
         },
       ],
     },
-
-    /* ================================================================ */
-    /* THE DEAD VILLAGE                                                 */
-    /* ================================================================ */
 
     village: {
       id: 'village',
@@ -637,7 +615,7 @@ export class StoryEngine {
             id: 'house-01',
             speaker: 'The Housekeeper',
             text: 'You always look surprised when you find these.',
-            duration: 3600,
+            duration: 4600,
             tone: 'mystic',
             voice: '/audio/vo/house_unknown_01.mp3',
           },
@@ -645,7 +623,7 @@ export class StoryEngine {
             id: 'house-02',
             speaker: 'The Housekeeper',
             text: 'You should be used to it by now.',
-            duration: 3400,
+            duration: 3900,
             tone: 'dark',
             voice: '/audio/vo/house_unknown_02.mp3',
           },
@@ -707,7 +685,7 @@ export class StoryEngine {
             id: 'journal-03',
             speaker: 'Nicholas Johnson',
             text: 'Day 42. I have stopped asking for forgiveness.',
-            duration: 4000,
+            duration: 4200,
             tone: 'broken',
             voice: '/audio/vo/nicholas_journal_03.mp3',
           },
@@ -744,6 +722,7 @@ export class StoryEngine {
       ],
     },
 
+    /* Bell Keeper — heals via Mend */
     bell_tower: {
       id: 'bell_tower',
       title: 'THE BELL TOWER',
@@ -762,7 +741,7 @@ export class StoryEngine {
             id: 'bell-01',
             speaker: 'Bell Keeper',
             text: 'You should not have rung the bell.',
-            duration: 3600,
+            duration: 3900,
             tone: 'ominous',
             voice: '/audio/vo/bell_keeper_01.mp3',
           },
@@ -792,9 +771,10 @@ export class StoryEngine {
           result: 'battle',
           nextNodeId: 'blood_hunters',
           enemyName: 'THE BELL KEEPER',
-          enemyHp: 1200,
-          enemyMaxHp: 1200,
-          enemyAttack: 18,
+          enemyHp: 3400,
+          enemyMaxHp: 3400,
+          enemyAttack: 150,
+          enemyAbilities: ['rend', 'sweep', 'mend', 'howl'],
         },
         {
           id: 'leave_bell',
@@ -811,6 +791,7 @@ export class StoryEngine {
       ],
     },
 
+    /* Blood Hunters — heal by draining */
     blood_hunters: {
       id: 'blood_hunters',
       title: 'THE BLOOD HUNTERS',
@@ -859,9 +840,10 @@ export class StoryEngine {
           result: 'battle',
           nextNodeId: 'graveyard',
           enemyName: 'BLOOD HUNTERS',
-          enemyHp: 1300,
-          enemyMaxHp: 1300,
-          enemyAttack: 20,
+          enemyHp: 3600,
+          enemyMaxHp: 3600,
+          enemyAttack: 160,
+          enemyAbilities: ['rend', 'sweep', 'drain'],
         },
         {
           id: 'run_hunters',
@@ -878,6 +860,7 @@ export class StoryEngine {
       ],
     },
 
+    /* Remnant — heals via both Mend and Drain */
     graveyard: {
       id: 'graveyard',
       title: 'THE GRAVEYARD',
@@ -951,9 +934,10 @@ export class StoryEngine {
           result: 'battle',
           nextNodeId: 'team_crossroads',
           enemyName: 'THE REMNANT',
-          enemyHp: 1400,
-          enemyMaxHp: 1400,
-          enemyAttack: 21,
+          enemyHp: 3800,
+          enemyMaxHp: 3800,
+          enemyAttack: 170,
+          enemyAbilities: ['rend', 'sweep', 'mend', 'drain'],
         },
         {
           id: 'open_grave_2',
@@ -969,10 +953,6 @@ export class StoryEngine {
         },
       ],
     },
-
-    /* ================================================================ */
-    /* ACT II — FOUR HOUSES                                             */
-    /* ================================================================ */
 
     team_crossroads: {
       id: 'team_crossroads',
@@ -1094,7 +1074,7 @@ export class StoryEngine {
                 id: 'sw-battle',
                 speaker: 'The Chronicler',
                 text: 'Steel clashes beneath the blood-red sky.',
-                duration: 3500,
+                duration: 4500,
                 tone: 'danger',
                 voice: '/audio/vo/serpents_wolves_battle.mp3',
               },
@@ -1135,7 +1115,7 @@ export class StoryEngine {
             id: 'war-02',
             speaker: 'Nicholas Johnson',
             text: 'You are finally becoming what I knew you would become.',
-            duration: 4300,
+            duration: 4900,
             tone: 'pleased',
             voice: '/audio/vo/nicholas_war_02.mp3',
           },
@@ -1197,7 +1177,7 @@ export class StoryEngine {
             id: 'alliance-02',
             speaker: 'Ravens Captain',
             text: 'And if the mountain turns us against each other?',
-            duration: 3800,
+            duration: 4500,
             tone: 'worried',
             voice: '/audio/vo/ravens_alliance_01.mp3',
           },
@@ -1205,7 +1185,7 @@ export class StoryEngine {
             id: 'alliance-03',
             speaker: 'Serpents Captain',
             text: 'Then we remind ourselves who the real enemy is.',
-            duration: 4000,
+            duration: 4200,
             tone: 'determined',
             voice: '/audio/vo/serpents_alliance_01.mp3',
           },
@@ -1234,6 +1214,7 @@ export class StoryEngine {
       ],
     },
 
+    /* Hollow Knights — heals via Mend + phase heal */
     mountain_path: {
       id: 'mountain_path',
       title: 'THE MOUNTAIN PATH',
@@ -1250,9 +1231,18 @@ export class StoryEngine {
           result: 'battle',
           nextNodeId: 'truth',
           enemyName: 'HOLLOW KNIGHTS',
-          enemyHp: 1600,
-          enemyMaxHp: 1600,
-          enemyAttack: 28,
+          enemyHp: 4400,
+          enemyMaxHp: 4400,
+          enemyAttack: 190,
+          enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend'],
+          enemyPhases: [
+            {
+              hpThreshold: 0.5,
+              attackMultiplier: 1.2,
+              announcement: '"We died defending the Highlands."',
+              healOnEnter: 500,
+            },
+          ],
 
           onBattle: {
             id: 'hollow-knights',
@@ -1261,7 +1251,7 @@ export class StoryEngine {
                 id: 'hk-01',
                 speaker: 'Hollow Knight Commander',
                 text: 'We died defending the Highlands.',
-                duration: 3600,
+                duration: 3800,
                 tone: 'hollow',
                 voice: '/audio/vo/hollow_knight_01.mp3',
               },
@@ -1269,7 +1259,7 @@ export class StoryEngine {
                 id: 'hk-02',
                 speaker: 'Hollow Knight Commander',
                 text: 'Now you will die defending it too.',
-                duration: 3600,
+                duration: 3800,
                 tone: 'danger',
                 voice: '/audio/vo/hollow_knight_02.mp3',
               },
@@ -1290,10 +1280,6 @@ export class StoryEngine {
         },
       ],
     },
-
-    /* ================================================================ */
-    /* ACT III — THE TRUTH                                              */
-    /* ================================================================ */
 
     truth: {
       id: 'truth',
@@ -1339,7 +1325,7 @@ export class StoryEngine {
             id: 'truth-04',
             speaker: 'Nicholas Johnson',
             text: 'Every battle was part of the experiment.',
-            duration: 3900,
+            duration: 4200,
             tone: 'dark',
             voice: '/audio/vo/nicholas_truth_04.mp3',
           },
@@ -1347,7 +1333,7 @@ export class StoryEngine {
             id: 'truth-05',
             speaker: 'Nicholas Johnson',
             text: 'Every death taught me something.',
-            duration: 3600,
+            duration: 3900,
             tone: 'tragic',
             voice: '/audio/vo/nicholas_truth_05.mp3',
           },
@@ -1355,7 +1341,7 @@ export class StoryEngine {
             id: 'truth-06',
             speaker: 'Nicholas Johnson',
             text: 'And I built the Highlands to remember all of it.',
-            duration: 4300,
+            duration: 4900,
             tone: 'broken',
             voice: '/audio/vo/nicholas_truth_06.mp3',
           },
@@ -1384,10 +1370,6 @@ export class StoryEngine {
       ],
     },
 
-    /* ================================================================ */
-    /* THE FINAL DUEL — PvP #2                                          */
-    /* ================================================================ */
-
     final_duel: {
       id: 'final_duel',
       title: 'THE FINAL DUEL',
@@ -1405,7 +1387,7 @@ export class StoryEngine {
             id: 'duel-01',
             speaker: 'Nicholas Johnson',
             text: 'Only one of you is allowed to reach me.',
-            duration: 4000,
+            duration: 4200,
             tone: 'cold',
             voice: '/audio/vo/nicholas_final_duel_01.mp3',
           },
@@ -1421,7 +1403,7 @@ export class StoryEngine {
             id: 'duel-03',
             speaker: 'The Chronicler',
             text: 'Let the last survivors settle it.',
-            duration: 3400,
+            duration: 3800,
             tone: 'mystic',
             voice: '/audio/vo/final_duel_chronicler_01.mp3',
           },
@@ -1431,10 +1413,10 @@ export class StoryEngine {
       choices: [
         {
           id: 'ravens_dragons_final',
-          text: 'Ravens vs Dragons (PvP — winner advances)',
+          text: 'Ravens vs Wolves (PvP — winner advances)',
           result: 'battle',
           nextNodeId: 'confession',
-          versus: ['ravens', 'dragons'],
+          versus: ['ravens', 'wolves'],
 
           cutscene: {
             id: 'final-duel-ravens-dragons',
@@ -1474,10 +1456,10 @@ export class StoryEngine {
         },
         {
           id: 'serpents_wolves_final',
-          text: 'Serpents vs Wolves (PvP — winner advances)',
+          text: 'Serpents vs Dragons (PvP — winner advances)',
           result: 'battle',
           nextNodeId: 'confession',
-          versus: ['serpents', 'wolves'],
+          versus: ['serpents', 'dragons'],
 
           cutscene: {
             id: 'final-duel-serpents-wolves',
@@ -1508,7 +1490,7 @@ export class StoryEngine {
                 id: 'fsw-battle',
                 speaker: 'The Chronicler',
                 text: 'Steel rings out under the mountain.',
-                duration: 3500,
+                duration: 3800,
                 tone: 'danger',
                 voice: '/audio/vo/final_duel_battle_02.mp3',
               },
@@ -1518,15 +1500,11 @@ export class StoryEngine {
         {
           id: 'refuse_duel',
           text: 'Refuse the duel',
-          result: 'safe',
+          result: 'elimination',
           nextNodeId: 'confession',
         },
       ],
     },
-
-    /* ================================================================ */
-    /* ACT IV — THE CONFESSION AND THE ASCENT                           */
-    /* ================================================================ */
 
     confession: {
       id: 'confession',
@@ -1554,7 +1532,7 @@ export class StoryEngine {
             id: 'confession-02',
             speaker: 'Nicholas Johnson',
             text: 'Because the first time I tried to save everyone...',
-            duration: 3900,
+            duration: 4900,
             tone: 'sad',
             voice: '/audio/vo/nicholas_confession_02.mp3',
           },
@@ -1570,7 +1548,7 @@ export class StoryEngine {
             id: 'confession-04',
             speaker: 'Nicholas Johnson',
             text: 'So I built a world where death could be reversed.',
-            duration: 4200,
+            duration: 4900,
             tone: 'regret',
             voice: '/audio/vo/nicholas_confession_04.mp3',
           },
@@ -1578,7 +1556,7 @@ export class StoryEngine {
             id: 'confession-05',
             speaker: 'Nicholas Johnson',
             text: 'Then I discovered something terrible.',
-            duration: 3500,
+            duration: 3900,
             tone: 'dark',
             voice: '/audio/vo/nicholas_confession_05.mp3',
           },
@@ -1586,7 +1564,7 @@ export class StoryEngine {
             id: 'confession-06',
             speaker: 'Nicholas Johnson',
             text: 'People only become precious when they know they can lose them.',
-            duration: 4700,
+            duration: 5700,
             tone: 'philosophical',
             voice: '/audio/vo/nicholas_confession_06.mp3',
           },
@@ -1594,7 +1572,7 @@ export class StoryEngine {
             id: 'confession-07',
             speaker: 'Nicholas Johnson',
             text: 'So I gave them something to lose.',
-            duration: 3400,
+            duration: 3800,
             tone: 'dark',
             voice: '/audio/vo/nicholas_confession_07.mp3',
           },
@@ -1657,7 +1635,7 @@ export class StoryEngine {
             id: 'betrayal-02',
             speaker: 'Nicholas Johnson',
             text: 'I have killed you more times than you could ever remember.',
-            duration: 4400,
+            duration: 4900,
             tone: 'confession',
             voice: '/audio/vo/nicholas_betrayal_02.mp3',
           },
@@ -1665,7 +1643,7 @@ export class StoryEngine {
             id: 'betrayal-03',
             speaker: 'Nicholas Johnson',
             text: 'And every time... I hated myself a little more.',
-            duration: 4300,
+            duration: 4800,
             tone: 'broken',
             voice: '/audio/vo/nicholas_betrayal_03.mp3',
           },
@@ -1673,7 +1651,7 @@ export class StoryEngine {
             id: 'betrayal-04',
             speaker: 'Nicholas Johnson',
             text: 'But tonight is different.',
-            duration: 3300,
+            duration: 3900,
             tone: 'serious',
             voice: '/audio/vo/nicholas_betrayal_04.mp3',
           },
@@ -1681,7 +1659,7 @@ export class StoryEngine {
             id: 'betrayal-05',
             speaker: 'Nicholas Johnson',
             text: 'Tonight, one of you will remember everything.',
-            duration: 4300,
+            duration: 4900,
             tone: 'ominous',
             voice: '/audio/vo/nicholas_betrayal_05.mp3',
           },
@@ -1761,6 +1739,7 @@ export class StoryEngine {
       ],
     },
 
+    /* Sanctum — Nicholas's first form, 2 phases, full abilities */
     sanctum: {
       id: 'sanctum',
       title: 'THE SANCTUM',
@@ -1788,7 +1767,7 @@ export class StoryEngine {
             id: 'sanctum-02',
             speaker: 'Nicholas Johnson',
             text: 'Every person you met here was real.',
-            duration: 3700,
+            duration: 3900,
             tone: 'sad',
             voice: '/audio/vo/nicholas_sanctum_02.mp3',
           },
@@ -1796,7 +1775,7 @@ export class StoryEngine {
             id: 'sanctum-03',
             speaker: 'Nicholas Johnson',
             text: 'Every person you lost was real.',
-            duration: 3600,
+            duration: 3800,
             tone: 'tragic',
             voice: '/audio/vo/nicholas_sanctum_03.mp3',
           },
@@ -1804,7 +1783,7 @@ export class StoryEngine {
             id: 'sanctum-04',
             speaker: 'Nicholas Johnson',
             text: 'And every person you forgot...',
-            duration: 3400,
+            duration: 3800,
             tone: 'quiet',
             voice: '/audio/vo/nicholas_sanctum_04.mp3',
           },
@@ -1826,9 +1805,25 @@ export class StoryEngine {
           result: 'battle',
           nextNodeId: 'nicholas_boss',
           enemyName: 'NICHOLAS JOHNSON',
-          enemyHp: 1300,
-          enemyMaxHp: 1300,
-          enemyAttack: 35,
+          enemyHp: 5200,
+          enemyMaxHp: 5200,
+          enemyAttack: 250,
+          enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
+          enemyPhases: [
+            {
+              hpThreshold: 0.5,
+              attackMultiplier: 1.2,
+              announcement: '"You are still standing."',
+              healOnEnter: 600,
+            },
+            {
+              hpThreshold: 0.25,
+              attackMultiplier: 1.4,
+              announcement:
+                '"I have killed you more times than you could ever remember."',
+              healOnEnter: 800,
+            },
+          ],
         },
         {
           id: 'destroy_memory',
@@ -1836,9 +1831,25 @@ export class StoryEngine {
           result: 'battle',
           nextNodeId: 'nicholas_boss',
           enemyName: 'NICHOLAS JOHNSON',
-          enemyHp: 1300,
-          enemyMaxHp: 1300,
-          enemyAttack: 35,
+          enemyHp: 5200,
+          enemyMaxHp: 5200,
+          enemyAttack: 260,
+          enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
+          enemyPhases: [
+            {
+              hpThreshold: 0.5,
+              attackMultiplier: 1.2,
+              announcement: '"You are still standing."',
+              healOnEnter: 600,
+            },
+            {
+              hpThreshold: 0.25,
+              attackMultiplier: 1.4,
+              announcement:
+                '"I have killed you more times than you could ever remember."',
+              healOnEnter: 800,
+            },
+          ],
         },
         {
           id: 'touch_memory',
@@ -1849,6 +1860,7 @@ export class StoryEngine {
       ],
     },
 
+    /* Nicholas boss — second encounter, 2 phases, all abilities */
     nicholas_boss: {
       id: 'nicholas_boss',
       title: 'NICHOLAS JOHNSON',
@@ -1866,7 +1878,7 @@ export class StoryEngine {
             id: 'boss-01',
             speaker: 'Nicholas Johnson',
             text: 'You finally made it this far.',
-            duration: 3500,
+            duration: 3700,
             tone: 'calm',
             voice: '/audio/vo/nicholas_final_01.mp3',
           },
@@ -1874,7 +1886,7 @@ export class StoryEngine {
             id: 'boss-02',
             speaker: 'Nicholas Johnson',
             text: 'Do you know how many times I have watched you die?',
-            duration: 5300,
+            duration: 5900,
             tone: 'dark',
             voice: '/audio/vo/nicholas_final_02.mp3',
           },
@@ -1882,7 +1894,7 @@ export class StoryEngine {
             id: 'boss-03',
             speaker: 'Nicholas Johnson',
             text: 'Do you know how many times I have heard you scream?',
-            duration: 5300,
+            duration: 5900,
             tone: 'dark',
             voice: '/audio/vo/nicholas_final_03.mp3',
           },
@@ -1920,9 +1932,25 @@ export class StoryEngine {
           result: 'battle',
           nextNodeId: 'final_choice',
           enemyName: 'NICHOLAS JOHNSON',
-          enemyHp: 1500,
-          enemyMaxHp: 1500,
-          enemyAttack: 38,
+          enemyHp: 6400,
+          enemyMaxHp: 6400,
+          enemyAttack: 270,
+          enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
+          enemyPhases: [
+            {
+              hpThreshold: 0.5,
+              attackMultiplier: 1.2,
+              announcement: '"You are still standing."',
+              healOnEnter: 700,
+            },
+            {
+              hpThreshold: 0.25,
+              attackMultiplier: 1.4,
+              announcement:
+                '"I have killed you more times than you could ever remember."',
+              healOnEnter: 1000,
+            },
+          ],
 
           onBattle: {
             id: 'nicholas-phase-one',
@@ -1989,6 +2017,7 @@ export class StoryEngine {
       ],
     },
 
+    /* Final choice — three endings */
     final_choice: {
       id: 'final_choice',
       title: 'THE LAST MEMORY',
@@ -2068,9 +2097,29 @@ export class StoryEngine {
           result: 'battle',
           nextNodeId: 'ending_destroy',
           enemyName: 'NICHOLAS JOHNSON — FINAL FORM',
-          enemyHp: 2000,
-          enemyMaxHp: 2000,
-          enemyAttack: 42,
+          enemyHp: 7200,
+          enemyMaxHp: 7200,
+          enemyAttack: 300,
+          enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
+          enemyPhases: [
+            {
+              hpThreshold: 0.66,
+              attackMultiplier: 1.15,
+              announcement: '"Then let the Highlands remember you."',
+            },
+            {
+              hpThreshold: 0.4,
+              attackMultiplier: 1.35,
+              announcement: '"Because I will not die alone."',
+              healOnEnter: 1200,
+            },
+            {
+              hpThreshold: 0.15,
+              attackMultiplier: 1.6,
+              announcement: '"I will take this entire world with me."',
+              healOnEnter: 900,
+            },
+          ],
 
           onBattle: {
             id: 'nicholas-final-form',
@@ -2105,18 +2154,67 @@ export class StoryEngine {
         {
           id: 'preserve_memories',
           text: 'Preserve the memories',
-          result: 'safe',
-          nextNodeId: 'ending_destroy',
+          result: 'battle',
+          nextNodeId: 'ending_memory',
+          enemyName: 'NICHOLAS JOHNSON — FINAL FORM',
+          enemyHp: 7200,
+          enemyMaxHp: 7200,
+          enemyAttack: 300,
+          enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
+          enemyPhases: [
+            {
+              hpThreshold: 0.66,
+              attackMultiplier: 1.15,
+              announcement: '"Then let the Highlands remember you."',
+            },
+            {
+              hpThreshold: 0.4,
+              attackMultiplier: 1.35,
+              announcement: '"Because I will not die alone."',
+              healOnEnter: 1200,
+            },
+            {
+              hpThreshold: 0.15,
+              attackMultiplier: 1.6,
+              announcement: '"I will take this entire world with me."',
+              healOnEnter: 900,
+            },
+          ],
         },
         {
           id: 'remember_nicholas',
           text: 'Remember Nicholas',
-          result: 'safe',
-          nextNodeId: 'ending_destroy',
+          result: 'battle',
+          nextNodeId: 'ending_nicholas',
+          enemyName: 'NICHOLAS JOHNSON — FINAL FORM',
+          enemyHp: 7200,
+          enemyMaxHp: 7200,
+          enemyAttack: 300,
+          enemyAbilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
+          enemyPhases: [
+            {
+              hpThreshold: 0.66,
+              attackMultiplier: 1.15,
+              announcement: '"Then let the Highlands remember you."',
+            },
+            {
+              hpThreshold: 0.4,
+              attackMultiplier: 1.35,
+              announcement: '"Because I will not die alone."',
+              healOnEnter: 1200,
+            },
+            {
+              hpThreshold: 0.15,
+              attackMultiplier: 1.6,
+              announcement: '"I will take this entire world with me."',
+              healOnEnter: 900,
+            },
+          ],
         },
       ],
     },
 
+    /* Endings */
     ending_destroy: {
       id: 'ending_destroy',
       title: 'THE END OF THE HIGHLANDS',
@@ -2171,10 +2269,6 @@ export class StoryEngine {
       ],
     },
 
-    /* ================================================================ */
-    /* LEGACY ENDINGS — kept for audio refs, not reachable from start   */
-    /* ================================================================ */
-
     ending_memory: {
       id: 'ending_memory',
       title: 'THE MEMORY REMAINS',
@@ -2202,7 +2296,13 @@ export class StoryEngine {
           },
         ],
       },
-      choices: [],
+      choices: [
+        {
+          id: 'finish',
+          text: 'Finish',
+          result: 'credits',
+        },
+      ],
     },
 
     ending_nicholas: {
@@ -2267,13 +2367,16 @@ export class StoryEngine {
           },
         ],
       },
-      choices: [],
+      choices: [
+        {
+          id: 'finish',
+          text: 'Finish',
+          result: 'credits',
+        },
+      ],
     },
 
-    /* ================================================================ */
-    /* LEGACY SIDE NODES — kept for audio refs                          */
-    /* ================================================================ */
-
+    /* Legacy nodes */
     tower: {
       id: 'tower',
       title: 'THE WATCHTOWER',

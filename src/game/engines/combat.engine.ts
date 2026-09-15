@@ -1,8 +1,10 @@
+/* eslint-disable @typescript-eslint/no-unused-expressions */
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   Battle,
   CombatAction,
   CombatVariant,
+  CpuAbilityId,
   CpuBattle,
   CpuPersonality,
   CpuPhase,
@@ -15,25 +17,57 @@ import {
   TeamId,
 } from '../game.types';
 
+/* ------------------------------------------------------------------ */
+/* Tuning constants                                                    */
+/* ------------------------------------------------------------------ */
+
 const SKILL_DAMAGE: Record<SkillId, [number, number]> = {
-  shadow_strike: [90, 130],
-  blood_rage: [140, 190],
-  fire_burst: [110, 150],
-  void_blast: [120, 165],
+  shadow_strike: [180, 240],
+  blood_rage: [220, 300],
+  fire_burst: [200, 260],
+  void_blast: [230, 300],
 };
 
 const HEAL_AMOUNT: Record<HealId, number> = {
-  minor_heal: 120,
-  major_heal: 260,
+  minor_heal: 240,
+  major_heal: 520,
 };
 
-const BREAK_THRESHOLD = 100;
+/** Break meter — harder to trigger, capped gain per hit. */
+const BREAK_THRESHOLD = 200;
 const BREAK_PER_DAMAGE = 1.2;
-const BREAK_DECAY_PER_ACTION = 15;
+const BREAK_GAIN_CAP = 40;
+const BREAK_DECAY_PER_ACTION = 20;
+const BREAK_MIN_DAMAGE = 50;
+const BREAK_DURATION_TURNS = 2;
 
 /** Per-battle uses of each ability type, per player. */
 const MAX_SKILL_USES = 6;
 const MAX_HEAL_USES = 6;
+
+/** Enemy attack ramp — +3% per round, capped at +50%. */
+const ENEMY_ROUND_RAMP = 0.03;
+const ENEMY_ROUND_RAMP_CAP = 1.5;
+
+/** Enemy team-size pressure — +20% per extra player, capped at +60%. */
+const ENEMY_PRESSURE_PER_PLAYER = 0.2;
+const ENEMY_PRESSURE_CAP = 1.6;
+
+/** Enrage — triggers at 50% HP, hits 50% harder. */
+const ENRAGE_THRESHOLD = 0.5;
+const ENRAGE_MULT = 1.5;
+
+/** Howl is additive so it can't snowball in long fights. */
+const HOWL_GAIN_NORMAL = 20;
+const HOWL_GAIN_ENRAGED = 35;
+
+/** Enemy self-heal tuning. */
+const MEND_RATIO = 0.08; // heals 8% max HP
+const MEND_RATIO_ENRAGED = 0.12; // 12% when enraged
+const DRAIN_RATIO = 0.5; // drains 50% of damage dealt as HP
+
+/** Player damage — scaled to 1000 HP pool. */
+const PLAYER_ATTACK = [140, 220] as const;
 
 function isSkillId(value: CombatVariant | undefined): value is SkillId {
   return (
@@ -77,6 +111,8 @@ export class CombatEngine {
       status: 'active',
       sourceNodeId,
       log: [`${attackerTeamId} and ${defenderTeamId} collide!`],
+      queuedActions: [],
+      readyPlayerIds: [],
     };
 
     this.assignFirstAlivePlayer(game, battle, attackerTeamId);
@@ -97,6 +133,7 @@ export class CombatEngine {
       signatureMultiplier?: number;
       telegraphs?: boolean;
       phases?: CpuPhase[];
+      abilities?: CpuAbilityId[];
     },
   ): CpuBattle {
     this.resetBattleCharges(game);
@@ -109,18 +146,21 @@ export class CombatEngine {
       enemyName,
       enemyHp,
       enemyMaxHp,
-      enemyAttack: config?.attack ?? roll(12, 22),
+      enemyAttack: config?.attack ?? roll(180, 260),
       turnTeamId: teamId,
       status: 'active',
       round: 1,
       log: [`${enemyName} emerges from the shadows.`],
       personality: config?.personality ?? 'aggressive',
-      abilityChance: config?.abilityChance ?? 0.2,
+      abilityChance: config?.abilityChance ?? 0.25,
       signatureEveryNRounds: config?.signatureEveryNRounds ?? 0,
       signatureMultiplier: config?.signatureMultiplier ?? 1.6,
       telegraphs: config?.telegraphs ?? false,
       phases: config?.phases,
       phaseIndex: undefined,
+      abilities: config?.abilities,
+      queuedActions: [],
+      readyPlayerIds: [],
     };
 
     this.assignFirstAlivePlayer(game, battle, teamId);
@@ -140,6 +180,7 @@ export class CombatEngine {
       signatureMultiplier?: number;
       telegraphs?: boolean;
       phases?: CpuPhase[];
+      abilities?: CpuAbilityId[];
     },
   ): CpuBattle {
     this.resetBattleCharges(game);
@@ -158,23 +199,21 @@ export class CombatEngine {
       round: 1,
       log: [`${config.name} rises.`],
       personality: config.personality ?? 'boss',
-      abilityChance: config.abilityChance ?? 0.4,
+      abilityChance: config.abilityChance ?? 0.45,
       signatureEveryNRounds: config.signatureEveryNRounds ?? 3,
       signatureMultiplier: config.signatureMultiplier ?? 1.8,
       telegraphs: config.telegraphs ?? true,
       phases: config.phases,
       phaseIndex: undefined,
+      abilities: config.abilities,
+      queuedActions: [],
+      readyPlayerIds: [],
     };
 
     this.assignFirstAlivePlayer(game, battle, teamId);
     return battle;
   }
 
-  /**
-   * Gives every player a fresh skill/heal budget. Called the moment a
-   * battle is created so the roster reflects the charges on the first
-   * STATE_SYNC.
-   */
   private resetBattleCharges(game: GameState) {
     for (const team of Object.values(game.teams)) {
       for (const p of team.players) {
@@ -206,7 +245,6 @@ export class CombatEngine {
       throw new Error(`${player.name} is immobilized and cannot act.`);
     }
 
-    // ---- Charge checks -------------------------------------------------
     if (action === 'skill') {
       if ((player.skillCharges ?? 0) <= 0) {
         throw new Error(
@@ -254,9 +292,6 @@ export class CombatEngine {
           )
         : this.resolveCpuPlayerAction(game, battle, player, action, variant);
 
-    // Only spend the charge if the action actually resolved. If
-    // `resolveTeamAction` threw (bad target, unknown action), the charge
-    // is not consumed.
     if (action === 'skill') {
       player.skillCharges = (player.skillCharges ?? 0) - 1;
     }
@@ -331,7 +366,7 @@ export class CombatEngine {
   ): string {
     switch (action) {
       case 'attack': {
-        const damage = roll(40, 70);
+        const damage = roll(PLAYER_ATTACK[0], PLAYER_ATTACK[1]);
         battle.enemyHp = Math.max(0, battle.enemyHp - damage);
         return `${player.name} attacked ${battle.enemyName} for ${damage} damage.`;
       }
@@ -357,7 +392,7 @@ export class CombatEngine {
   }
 
   /* ------------------------------------------------------------------ */
-  /* PvP attacks (targeted)                                              */
+  /* PvP attacks                                                         */
   /* ------------------------------------------------------------------ */
 
   private pvpAttack(
@@ -371,7 +406,7 @@ export class CombatEngine {
       ? opponents.find((p) => p.id === targetId)
       : undefined;
     const target = requested ?? opponents[roll(0, opponents.length - 1)];
-    const damage = roll(40, 70);
+    const damage = roll(PLAYER_ATTACK[0], PLAYER_ATTACK[1]);
 
     target.hp = Math.max(0, target.hp - damage);
 
@@ -425,7 +460,7 @@ export class CombatEngine {
   }
 
   /* ------------------------------------------------------------------ */
-  /* Heal (targeted)                                                     */
+  /* Heal                                                                */
   /* ------------------------------------------------------------------ */
 
   private heal(
@@ -483,18 +518,19 @@ export class CombatEngine {
   }
 
   private applyBreakMeter(target: Player, damage: number): boolean {
+    if (damage < BREAK_MIN_DAMAGE) return false;
+
     const current = target.breakMeter ?? 0;
-    const gain = Math.min(
-      BREAK_THRESHOLD,
-      Math.round(damage * BREAK_PER_DAMAGE),
-    );
+    const rawGain = Math.round(damage * BREAK_PER_DAMAGE);
+    const gain = Math.min(BREAK_GAIN_CAP, rawGain);
+
     const next = Math.min(BREAK_THRESHOLD, current + gain);
     target.breakMeter = next;
 
     if (next >= BREAK_THRESHOLD && current < BREAK_THRESHOLD) {
       target.statusEffects = [
         ...(target.statusEffects ?? []).filter((s) => s.id !== 'immobilized'),
-        { id: 'immobilized', turns: 1 },
+        { id: 'immobilized', turns: BREAK_DURATION_TURNS },
       ];
       target.breakMeter = 0;
       this.brokeThisAction = true;
@@ -648,7 +684,7 @@ export class CombatEngine {
     }
 
     const personality = battle.personality ?? 'aggressive';
-    const abilityChance = battle.abilityChance ?? 0.25;
+    const abilityChance = battle.abilityChance ?? 0.3;
     const signatureEvery = battle.signatureEveryNRounds ?? 0;
     const usesSignature =
       signatureEvery > 0 && battle.round % signatureEvery === 0;
@@ -684,9 +720,9 @@ export class CombatEngine {
     battle.round += 1;
   }
 
-  /* -------------------------------------------------------------------- */
-  /* Target selection                                                     */
-  /* ---------------------------------------------------------------------- */
+  /* ------------------------------------------------------------------ */
+  /* Target selection                                                    */
+  /* ------------------------------------------------------------------ */
 
   private pickCpuTarget(
     battle: CpuBattle,
@@ -728,9 +764,9 @@ export class CombatEngine {
     }
   }
 
-  /* -------------------------------------------------------------------- */
-  /* Basic attack                                                         */
-  /* ---------------------------------------------------------------------- */
+  /* ------------------------------------------------------------------ */
+  /* Basic attack                                                        */
+  /* ------------------------------------------------------------------ */
 
   private cpuBasicAttack(
     game: GameState,
@@ -738,11 +774,16 @@ export class CombatEngine {
     target: Player,
     phaseMultiplier: number,
   ) {
-    const base = roll(
-      Math.max(1, battle.enemyAttack - 4),
-      battle.enemyAttack + 4,
+    const roundMult = Math.min(
+      ENEMY_ROUND_RAMP_CAP,
+      1 + ((battle.round ?? 1) - 1) * ENEMY_ROUND_RAMP,
     );
-    const enemyDmg = Math.round(base * phaseMultiplier);
+
+    const base = roll(
+      Math.max(1, battle.enemyAttack - 40),
+      battle.enemyAttack + 40,
+    );
+    const enemyDmg = Math.round(base * phaseMultiplier * roundMult);
 
     target.hp = Math.max(0, target.hp - enemyDmg);
 
@@ -762,9 +803,9 @@ export class CombatEngine {
     }
   }
 
-  /* -------------------------------------------------------------------- */
-  /* Ability                                                              */
-  /* ---------------------------------------------------------------------- */
+  /* ------------------------------------------------------------------ */
+  /* Ability pool                                                        */
+  /* ------------------------------------------------------------------ */
 
   private cpuAbility(
     game: GameState,
@@ -778,39 +819,27 @@ export class CombatEngine {
     );
     const aliveCount = aliveTeam.length;
 
-    // Enrage when the boss drops below 40% HP.
     const hpRatio =
       battle.enemyMaxHp > 0 ? battle.enemyHp / battle.enemyMaxHp : 1;
-    const enraged = personality === 'boss' && hpRatio < 0.4;
+    const enraged = personality === 'boss' && hpRatio < ENRAGE_THRESHOLD;
 
-    // Team-size pressure: enemy hits harder the more players are alive,
-    // so 4v1 fights don't trivialize the boss. Caps at +45%.
-    const pressure = Math.min(1.45, 1 + (aliveCount - 1) * 0.15);
+    const pressure = Math.min(
+      ENEMY_PRESSURE_CAP,
+      1 + (aliveCount - 1) * ENEMY_PRESSURE_PER_PLAYER,
+    );
 
-    // Enrage adds another +25% on top of pressure.
-    const enrageMult = enraged ? 1.25 : 1;
-
-    // Total multiplier on every damaging ability this round.
+    const enrageMult = enraged ? ENRAGE_MULT : 1;
     const mult = phaseMultiplier * pressure * enrageMult;
 
-    /**
-     * Roll damage in the given range, apply the round multiplier,
-     * and return the final integer.
-     */
     const dmgRoll = (min: number, max: number): number =>
       Math.max(1, Math.round(roll(min, max) * mult));
 
-    /**
-     * Apply damage to a single target with crit + death handling.
-     * Returns the actual damage dealt (0 if already dead).
-     */
     const hit = (
       p: Player,
       rawDmg: number,
     ): { dealt: number; crit: boolean } => {
       if (p.status !== 'alive') return { dealt: 0, crit: false };
 
-      // 12% crit chance, 1.75x damage.
       const crit = Math.random() < 0.12;
       const dmg = Math.round(rawDmg * (crit ? 1.75 : 1));
 
@@ -828,17 +857,21 @@ export class CombatEngine {
       return { dealt: dmg, crit };
     };
 
-    // ------------------------------------------------------------------
-    // Ability set
-    // ------------------------------------------------------------------
+    /* ---------------------------------------------------------------- */
+    /* Ability definitions                                               */
+    /* ---------------------------------------------------------------- */
 
-    const abilities = [
+    const allAbilities: Array<{
+      id: CpuAbilityId;
+      name: string;
+      minRound?: number;
+      run: () => void;
+    }> = [
       {
         id: 'rend',
         name: 'Rend',
-        // Single-target heavy hit.
         run: () => {
-          const raw = dmgRoll(14, 22);
+          const raw = dmgRoll(88, 130);
           const { dealt, crit } = hit(target, raw);
           battle.log.push(
             crit
@@ -850,10 +883,9 @@ export class CombatEngine {
       {
         id: 'howl',
         name: 'Howl',
-        // Buff the enemy's attack. Cannot crit, does not deal damage.
         run: () => {
-          const gain = enraged ? 0.25 : 0.15;
-          battle.enemyAttack = Math.round(battle.enemyAttack * (1 + gain));
+          const gain = enraged ? HOWL_GAIN_ENRAGED : HOWL_GAIN_NORMAL;
+          battle.enemyAttack += gain;
           battle.log.push(
             enraged
               ? `${battle.enemyName} howls in fury. Its attacks swell with rage.`
@@ -864,16 +896,14 @@ export class CombatEngine {
       {
         id: 'sweep',
         name: 'Sweep',
-        // AoE — small damage to everyone alive.
         run: () => {
-          const totalHit = aliveCount;
-          if (totalHit === 0) return;
+          if (aliveCount === 0) return;
 
           let anyCrit = false;
           let totalDealt = 0;
 
           for (const p of aliveTeam) {
-            const raw = dmgRoll(4, 9);
+            const raw = dmgRoll(32, 56);
             const { dealt, crit } = hit(p, raw);
             if (crit) anyCrit = true;
             totalDealt += dealt;
@@ -889,10 +919,9 @@ export class CombatEngine {
       {
         id: 'crush',
         name: 'Crush',
-        // Late-fight heavy AoE, only unlocked at round 4+ or when enraged.
         minRound: 4,
         run: () => {
-          const raw = dmgRoll(10, 16);
+          const raw = dmgRoll(64, 96);
           let totalDealt = 0;
 
           for (const p of aliveTeam) {
@@ -905,49 +934,144 @@ export class CombatEngine {
           );
         },
       },
+      {
+        id: 'mend',
+        name: 'Mend',
+        run: () => {
+          const ratio = enraged ? MEND_RATIO_ENRAGED : MEND_RATIO;
+          const healAmount = Math.round(battle.enemyMaxHp * ratio);
+          const before = battle.enemyHp;
+          battle.enemyHp = Math.min(
+            battle.enemyMaxHp,
+            battle.enemyHp + healAmount,
+          );
+          const healed = battle.enemyHp - before;
+          battle.log.push(
+            healed > 0
+              ? enraged
+                ? `${battle.enemyName} mends its wounds in fury, recovering ${healed} HP.`
+                : `${battle.enemyName} mends its wounds for ${healed} HP.`
+              : `${battle.enemyName} tries to mend, but it is already whole.`,
+          );
+        },
+      },
+      {
+        id: 'drain',
+        name: 'Drain',
+        run: () => {
+          const raw = dmgRoll(60, 100);
+          const { dealt, crit } = hit(target, raw);
+
+          const drainAmount = Math.round(dealt * DRAIN_RATIO);
+          const before = battle.enemyHp;
+          battle.enemyHp = Math.min(
+            battle.enemyMaxHp,
+            battle.enemyHp + drainAmount,
+          );
+          const healed = battle.enemyHp - before;
+
+          battle.log.push(
+            crit
+              ? `${battle.enemyName} Drains ${target.name} — CRITICAL for ${dealt} damage, recovering ${healed} HP.`
+              : `${battle.enemyName} Drains ${target.name} for ${dealt} damage and recovers ${healed} HP.`,
+          );
+        },
+      },
     ];
 
-    // ------------------------------------------------------------------
-    // Move selection
-    // ------------------------------------------------------------------
+    /* ---------------------------------------------------------------- */
+    /* Which abilities are allowed for this enemy?                       */
+    /* ---------------------------------------------------------------- */
+
+    const allowed = battle.abilities ?? null;
 
     const round = battle.round ?? 1;
+    const pool = allAbilities.filter(
+      (a) =>
+        (a.minRound ?? 1) <= round &&
+        (allowed === null || allowed.includes(a.id)),
+    );
 
-    // Filter out locked abilities.
-    const pool = abilities.filter((a) => (a.minRound ?? 1) <= round);
-
-    let pick: (typeof abilities)[number];
-
-    if (enraged) {
-      // Enraged bosses alternate between Crush and Rend with a
-      // sprinkle of Howl to keep the pressure up.
-      const rollEnraged = Math.random();
-      if (rollEnraged < 0.5) pick = abilities.find((a) => a.id === 'crush')!;
-      else if (rollEnraged < 0.85)
-        pick = abilities.find((a) => a.id === 'rend')!;
-      else pick = abilities.find((a) => a.id === 'howl')!;
-    } else if (personality === 'boss') {
-      // Bosses telegraph their next move — 25% chance to Howl, otherwise
-      // weighted toward Rend and Sweep.
-      const r = Math.random();
-      if (r < 0.25) pick = abilities.find((a) => a.id === 'howl')!;
-      else if (r < 0.65) pick = abilities.find((a) => a.id === 'rend')!;
-      else if (r < 0.9) pick = abilities.find((a) => a.id === 'sweep')!;
-      else pick = abilities.find((a) => a.id === 'crush')!;
-    } else {
-      // Regular enemies: mostly Rend, occasional Sweep, rare Howl.
-      const r = Math.random();
-      if (r < 0.6) pick = abilities.find((a) => a.id === 'rend')!;
-      else if (r < 0.85) pick = abilities.find((a) => a.id === 'sweep')!;
-      else pick = abilities.find((a) => a.id === 'howl')!;
+    if (pool.length === 0) {
+      // Fallback: nothing allowed this round — basic attack.
+      this.cpuBasicAttack(game, battle, target, phaseMultiplier);
+      return;
     }
 
+    /* ---------------------------------------------------------------- */
+    /* Weighted pick                                                     */
+    /* ---------------------------------------------------------------- */
+
+    const pick = this.pickAbility(pool, enraged, personality);
     pick.run();
   }
 
-  /* -------------------------------------------------------------------- */
-  /* Signature move                                                       */
-  /* ---------------------------------------------------------------------- */
+  /**
+   * Weighted pick from the allowed ability pool. Enraged bosses favor
+   * Crush + Rend + Drain, regular bosses favor Rend + Sweep with the
+   * occasional Mend, and everyone else leans on Rend + Sweep.
+   */
+  private pickAbility<T extends { id: CpuAbilityId }>(
+    pool: T[],
+    enraged: boolean,
+    personality: CpuPersonality,
+  ): T {
+    const weights: Record<CpuAbilityId, number> = {
+      rend: 0,
+      howl: 0,
+      sweep: 0,
+      crush: 0,
+      mend: 0,
+      drain: 0,
+    };
+
+    if (enraged) {
+      weights.crush = 30;
+      weights.rend = 30;
+      weights.drain = 25;
+      weights.howl = 15;
+    } else if (personality === 'boss') {
+      weights.rend = 30;
+      weights.sweep = 20;
+      weights.crush = 10;
+      weights.howl = 15;
+      weights.mend = 15;
+      weights.drain = 10;
+    } else if (personality === 'aggressive') {
+      weights.rend = 40;
+      weights.sweep = 20;
+      weights.howl = 10;
+      weights.mend = 10;
+      weights.drain = 20;
+    } else if (personality === 'strategic') {
+      weights.rend = 35;
+      weights.sweep = 20;
+      weights.howl = 15;
+      weights.mend = 20;
+      weights.drain = 10;
+    } else {
+      weights.rend = 45;
+      weights.sweep = 25;
+      weights.howl = 15;
+      weights.mend = 5;
+      weights.drain = 10;
+    }
+
+    const filtered = pool.filter((a) => weights[a.id] > 0);
+    if (filtered.length === 0) return pool[0];
+
+    const total = filtered.reduce((sum, a) => sum + weights[a.id], 0);
+    let r = Math.random() * total;
+    for (const a of filtered) {
+      r -= weights[a.id];
+      if (r <= 0) return a;
+    }
+    return filtered[filtered.length - 1];
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Signature move                                                      */
+  /* ------------------------------------------------------------------ */
 
   private cpuSignature(
     game: GameState,
@@ -956,7 +1080,7 @@ export class CombatEngine {
     phaseMultiplier: number,
   ) {
     const multiplier = battle.signatureMultiplier ?? 1.6;
-    const dmg = Math.round(roll(18, 26) * phaseMultiplier * multiplier);
+    const dmg = Math.round(roll(112, 160) * phaseMultiplier * multiplier);
 
     target.hp = Math.max(0, target.hp - dmg);
 
@@ -974,9 +1098,9 @@ export class CombatEngine {
     }
   }
 
-  /* -------------------------------------------------------------------- */
-  /* Boss phases                                                          */
-  /* ---------------------------------------------------------------------- */
+  /* ------------------------------------------------------------------ */
+  /* Boss phases                                                         */
+  /* ------------------------------------------------------------------ */
 
   private checkBossPhase(battle: CpuBattle) {
     if (!battle.phases || battle.phases.length === 0) return;
@@ -991,13 +1115,13 @@ export class CombatEngine {
         battle.log.push(phase.announcement);
 
         if (phase.healOnEnter) {
+          const before = battle.enemyHp;
           battle.enemyHp = Math.min(
             battle.enemyMaxHp,
             battle.enemyHp + phase.healOnEnter,
           );
-          battle.log.push(
-            `${battle.enemyName} regenerates ${phase.healOnEnter} HP!`,
-          );
+          const healed = battle.enemyHp - before;
+          battle.log.push(`${battle.enemyName} regenerates ${healed} HP!`);
         }
       }
     }

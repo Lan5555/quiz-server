@@ -16,6 +16,7 @@ import {
 import { GameStore, GLOBAL_ROOM_CODE } from './game.store';
 import { StoryEngine } from './engines/story.engine';
 import { CombatEngine } from './engines/combat.engine';
+import type { CpuAbilityId, CpuPhase } from './game.types';
 
 interface ConnectedClient {
   socket: Socket;
@@ -35,6 +36,168 @@ const ENEMY_RETALIATE_DELAY_MS = 1200;
 const ROUND_DECISION_TIMEOUT_MS = 30_000;
 /** How long a single story-phase player has to pick a choice, in ms. */
 const STORY_DECISION_TIMEOUT_MS = 50_000;
+
+/* At the top of game.gateway.ts, extend the interface: */
+
+interface EnemyConfig {
+  hp: number;
+  attack: number;
+  personality: 'aggressive' | 'chaotic' | 'strategic' | 'boss';
+  abilityChance: number;
+  signatureEveryNRounds: number;
+  signatureMultiplier: number;
+  telegraphs?: boolean;
+  phases?: CpuPhase[];
+  abilities?: CpuAbilityId[];
+}
+
+/* Replace ENEMY_CONFIGS with this: */
+
+const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
+  'ECHO BEAST': {
+    hp: 2800,
+    attack: 140,
+    personality: 'chaotic',
+    abilityChance: 0.35,
+    signatureEveryNRounds: 4,
+    signatureMultiplier: 1.6,
+    abilities: ['rend', 'sweep'],
+  },
+  'GATE WARDEN': {
+    hp: 3200,
+    attack: 140,
+    personality: 'boss',
+    abilityChance: 0.45,
+    signatureEveryNRounds: 3,
+    signatureMultiplier: 1.8,
+    telegraphs: true,
+    abilities: ['rend', 'sweep', 'howl'],
+    phases: [
+      {
+        hpThreshold: 0.66,
+        attackMultiplier: 1.15,
+        announcement: '"You should have turned back."',
+      },
+      {
+        hpThreshold: 0.33,
+        attackMultiplier: 1.35,
+        announcement: 'The Warden sheds its armor.',
+        healOnEnter: 400,
+      },
+    ],
+  },
+  'THE BELL KEEPER': {
+    hp: 3400,
+    attack: 150,
+    personality: 'strategic',
+    abilityChance: 0.35,
+    signatureEveryNRounds: 3,
+    signatureMultiplier: 1.7,
+    telegraphs: true,
+    abilities: ['rend', 'sweep', 'mend', 'howl'],
+  },
+  'BLOOD HUNTERS': {
+    hp: 3600,
+    attack: 160,
+    personality: 'aggressive',
+    abilityChance: 0.35,
+    signatureEveryNRounds: 4,
+    signatureMultiplier: 1.7,
+    abilities: ['rend', 'sweep', 'drain'],
+  },
+  'THE REMNANT': {
+    hp: 3800,
+    attack: 170,
+    personality: 'strategic',
+    abilityChance: 0.4,
+    signatureEveryNRounds: 3,
+    signatureMultiplier: 1.8,
+    telegraphs: true,
+    abilities: ['rend', 'sweep', 'mend', 'drain'],
+  },
+  'RAVENS vs DRAGONS': {
+    hp: 3800,
+    attack: 160,
+    personality: 'strategic',
+    abilityChance: 0.4,
+    signatureEveryNRounds: 3,
+    signatureMultiplier: 1.8,
+    telegraphs: true,
+    abilities: ['rend', 'sweep', 'mend'],
+  },
+  'HOLLOW KNIGHTS': {
+    hp: 4400,
+    attack: 190,
+    personality: 'boss',
+    abilityChance: 0.45,
+    signatureEveryNRounds: 3,
+    signatureMultiplier: 1.9,
+    telegraphs: true,
+    abilities: ['rend', 'sweep', 'crush', 'howl', 'mend'],
+    phases: [
+      {
+        hpThreshold: 0.5,
+        attackMultiplier: 1.2,
+        announcement: '"We died defending the Highlands."',
+        healOnEnter: 500,
+      },
+    ],
+  },
+  'NICHOLAS JOHNSON': {
+    hp: 5200,
+    attack: 250,
+    personality: 'boss',
+    abilityChance: 0.5,
+    signatureEveryNRounds: 3,
+    signatureMultiplier: 1.9,
+    telegraphs: true,
+    abilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
+    phases: [
+      {
+        hpThreshold: 0.5,
+        attackMultiplier: 1.2,
+        announcement: '"You are still standing."',
+        healOnEnter: 600,
+      },
+      {
+        hpThreshold: 0.25,
+        attackMultiplier: 1.4,
+        announcement:
+          '"I have killed you more times than you could ever remember."',
+        healOnEnter: 800,
+      },
+    ],
+  },
+  'NICHOLAS JOHNSON — FINAL FORM': {
+    hp: 7200,
+    attack: 300,
+    personality: 'boss',
+    abilityChance: 0.55,
+    signatureEveryNRounds: 2,
+    signatureMultiplier: 2.0,
+    telegraphs: true,
+    abilities: ['rend', 'sweep', 'crush', 'howl', 'mend', 'drain'],
+    phases: [
+      {
+        hpThreshold: 0.66,
+        attackMultiplier: 1.15,
+        announcement: '"Then let the Highlands remember you."',
+      },
+      {
+        hpThreshold: 0.4,
+        attackMultiplier: 1.35,
+        announcement: '"Because I will not die alone."',
+        healOnEnter: 1200,
+      },
+      {
+        hpThreshold: 0.15,
+        attackMultiplier: 1.6,
+        announcement: '"I will take this entire world with me."',
+        healOnEnter: 900,
+      },
+    ],
+  },
+};
 
 @WebSocketGateway({ cors: true })
 export class GameGateway {
@@ -327,6 +490,9 @@ export class GameGateway {
     }
     client.playerId = undefined;
 
+    // Keep rotation indices in range after a removal.
+    this.clampRotations(game);
+
     this.broadcastState();
     this.broadcastRoomList();
   }
@@ -372,6 +538,9 @@ export class GameGateway {
     client.playerId = event.playerId;
     client.roomCode = GLOBAL_ROOM;
     client.watcher = false;
+
+    // New joins shouldn't break rotation indices.
+    this.clampRotations(game);
 
     this.broadcastStory();
     this.broadcastState();
@@ -455,9 +624,16 @@ export class GameGateway {
     game.currentTeamId = populated[0];
     game.phase = 'story';
 
+    // Reset rotation for every participating team.
+    game.playerRotation = {};
+    for (const teamId of populated) {
+      game.playerRotation[teamId] = 0;
+    }
+
     const firstTeam = game.teams[populated[0]];
     const firstAlive = firstTeam.players.find((p) => p.status === 'alive');
     game.activePlayerId = firstAlive?.id;
+    game.lastActivePlayerId = firstAlive?.id;
 
     this.seenCutscenes.clear();
     this.lastCutsceneNodeId = null;
@@ -485,8 +661,18 @@ export class GameGateway {
     game.currentTeamId = teamId;
 
     const team = game.teams[teamId];
-    const firstAlive = team.players.find((p) => p.status === 'alive');
-    game.activePlayerId = firstAlive?.id;
+    const alive = team.players.filter(
+      (p) =>
+        p.status === 'alive' &&
+        !(p.statusEffects ?? []).some((s) => s.id === 'immobilized'),
+    );
+
+    // Resume this team's rotation from where it left off.
+    game.playerRotation = game.playerRotation ?? {};
+    const startIdx = game.playerRotation[teamId] ?? 0;
+    const safeIdx = alive.length ? startIdx % alive.length : 0;
+    game.activePlayerId = alive[safeIdx]?.id;
+    game.lastActivePlayerId = game.activePlayerId;
 
     this.broadcastEvent(GLOBAL_ROOM, {
       type: 'TEAM_TURN',
@@ -516,6 +702,8 @@ export class GameGateway {
     player.status = 'eliminated';
     player.hp = 0;
 
+    this.clampRotations(game);
+
     this.broadcastEvent(GLOBAL_ROOM, { type: 'ELIMINATE', playerId });
     this.broadcastState();
     this.broadcastRoomList();
@@ -525,48 +713,16 @@ export class GameGateway {
   /* Turn rotation                                                       */
   /* ================================================================== */
 
-  private advanceTeam(game: NonNullable<ReturnType<GameStore['getGame']>>) {
-    const pool = game.activeTeams ?? ALL_TEAMS;
-    const canAct = (teamId: TeamId) =>
-      game.teams[teamId].players.some(
-        (p) =>
-          p.status === 'alive' &&
-          !(p.statusEffects ?? []).some((s) => s.id === 'immobilized'),
-      );
-
-    const startIndex = pool.indexOf(game.currentTeamId);
-    const startFrom = startIndex === -1 ? 0 : startIndex + 1;
-
-    for (let i = 0; i < pool.length; i++) {
-      const candidate = pool[(startFrom + i) % pool.length];
-      if (canAct(candidate)) {
-        game.currentTeamId = candidate;
-
-        const team = game.teams[candidate];
-        const firstAlive = team.players.find(
-          (p) =>
-            p.status === 'alive' &&
-            !(p.statusEffects ?? []).some((s) => s.id === 'immobilized'),
-        );
-        game.activePlayerId = firstAlive?.id;
-
-        this.broadcastEvent(GLOBAL_ROOM, {
-          type: 'TEAM_TURN',
-          teamId: candidate,
-          activePlayerId: game.activePlayerId,
-        });
-
-        this.startStoryTimeout(game);
-        return;
-      }
-    }
-
-    game.phase = 'ended';
-    this.clearRoundTimeout();
-    this.clearStoryTimeout();
-    this.broadcastState();
-  }
-
+  /**
+   * Advances to the next player on the CURRENT team, stores the new
+   * index in `game.playerRotation`, then hands off to the next team.
+   *
+   * Resulting order (example with 3-player Ravens, 2-player Wolves):
+   *   ravens.p1 → wolves.p1 → dragons.p1 → serpents.p1
+   *   ravens.p2 → wolves.p2 → dragons.p2 → serpents.p2
+   *   ravens.p3 → wolves.p1 → dragons.p3 → serpents.p3
+   *   ravens.p1 → ...
+   */
   private advanceActivePlayer(
     game: NonNullable<ReturnType<GameStore['getGame']>>,
   ) {
@@ -586,12 +742,11 @@ export class GameGateway {
     const nextIndex =
       currentIndex === -1 ? 0 : (currentIndex + 1) % alive.length;
 
-    if (currentIndex !== -1 && nextIndex === 0) {
-      this.advanceTeam(game);
-      return;
-    }
+    game.playerRotation = game.playerRotation ?? {};
+    game.playerRotation[game.currentTeamId] = nextIndex;
 
     game.activePlayerId = alive[nextIndex].id;
+    game.lastActivePlayerId = game.activePlayerId;
 
     this.broadcastEvent(GLOBAL_ROOM, {
       type: 'TEAM_TURN',
@@ -600,6 +755,73 @@ export class GameGateway {
     });
 
     this.startStoryTimeout(game);
+
+    // Hand off to the next team. Their rotation resumes from where it
+    // left off when we come back to them.
+    this.advanceTeam(game);
+  }
+
+  private advanceTeam(game: NonNullable<ReturnType<GameStore['getGame']>>) {
+    const pool = game.activeTeams ?? ALL_TEAMS;
+    const canAct = (teamId: TeamId) =>
+      game.teams[teamId].players.some(
+        (p) =>
+          p.status === 'alive' &&
+          !(p.statusEffects ?? []).some((s) => s.id === 'immobilized'),
+      );
+
+    const startIndex = pool.indexOf(game.currentTeamId);
+    const startFrom = startIndex === -1 ? 0 : startIndex + 1;
+
+    for (let i = 0; i < pool.length; i++) {
+      const candidate = pool[(startFrom + i) % pool.length];
+      if (!canAct(candidate)) continue;
+
+      game.currentTeamId = candidate;
+
+      const team = game.teams[candidate];
+      const alive = team.players.filter(
+        (p) =>
+          p.status === 'alive' &&
+          !(p.statusEffects ?? []).some((s) => s.id === 'immobilized'),
+      );
+
+      game.playerRotation = game.playerRotation ?? {};
+      const startIdx = game.playerRotation[candidate] ?? 0;
+      const safeIdx = alive.length ? startIdx % alive.length : 0;
+
+      game.activePlayerId = alive[safeIdx].id;
+      game.lastActivePlayerId = game.activePlayerId;
+
+      this.broadcastEvent(GLOBAL_ROOM, {
+        type: 'TEAM_TURN',
+        teamId: candidate,
+        activePlayerId: game.activePlayerId,
+      });
+
+      this.startStoryTimeout(game);
+      return;
+    }
+
+    game.phase = 'ended';
+    this.clearRoundTimeout();
+    this.clearStoryTimeout();
+    this.broadcastState();
+  }
+
+  /**
+   * Clamps every team's rotation index to the current alive count so
+   * a shrinking roster can never point at a dead player.
+   */
+  private clampRotations(game: NonNullable<ReturnType<GameStore['getGame']>>) {
+    game.playerRotation = game.playerRotation ?? {};
+    for (const teamId of Object.keys(game.teams) as TeamId[]) {
+      const alive = game.teams[teamId].players.filter(
+        (p) => p.status === 'alive',
+      );
+      const current = game.playerRotation[teamId] ?? 0;
+      game.playerRotation[teamId] = alive.length ? current % alive.length : 0;
+    }
   }
 
   /* ================================================================== */
@@ -642,7 +864,6 @@ export class GameGateway {
       return;
     }
 
-    // The choice is in — clear the story timer.
     this.clearStoryTimeout();
 
     const { choice } = result;
@@ -702,6 +923,10 @@ export class GameGateway {
     this.broadcastRoomList();
   }
 
+  /* ------------------------------------------------------------------ */
+  /* Battle init from a story choice                                     */
+  /* ------------------------------------------------------------------ */
+
   private startBattleFromChoice(
     game: NonNullable<ReturnType<GameStore['getGame']>>,
     choice: StoryChoice,
@@ -756,41 +981,42 @@ export class GameGateway {
         game.currentNodeId,
       );
     } else if (choice.enemyName) {
-      const isBoss = choice.enemyName === 'NICHOLAS JOHNSON';
+      const config = ENEMY_CONFIGS[choice.enemyName];
 
-      game.battle = isBoss
-        ? this.combatEngine.createBossBattle(game, game.currentTeamId, {
-            name: choice.enemyName,
-            hp: choice.enemyHp ?? 400,
-            attack: 22,
-            personality: 'boss',
-            phases: [
-              {
-                hpThreshold: 0.66,
-                attackMultiplier: 1.15,
-                announcement: '"You should have turned back."',
-              },
-              {
-                hpThreshold: 0.33,
-                attackMultiplier: 1.35,
-                announcement: 'The Warden sheds its armor.',
-                healOnEnter: 60,
-              },
-            ],
-          })
-        : this.combatEngine.createCpuBattle(
-            game,
-            game.currentTeamId,
-            choice.enemyName,
-            choice.enemyHp ?? 100,
-            choice.enemyMaxHp ?? choice.enemyHp ?? 100,
-            {
-              personality: 'aggressive',
-              abilityChance: 0.25,
-              signatureEveryNRounds: 4,
-              signatureMultiplier: 1.5,
-            },
-          );
+      if (config) {
+        game.battle = this.combatEngine.createCpuBattle(
+          game,
+          game.currentTeamId,
+          choice.enemyName,
+          choice.enemyHp ?? config.hp,
+          choice.enemyMaxHp ?? config.hp,
+          {
+            attack: choice.enemyAttack ?? config.attack,
+            personality: config.personality,
+            abilityChance: config.abilityChance,
+            signatureEveryNRounds: config.signatureEveryNRounds,
+            signatureMultiplier: config.signatureMultiplier,
+            telegraphs: config.telegraphs,
+            phases: choice.enemyPhases ?? config.phases, // ← prefer choice
+            abilities: choice.enemyAbilities ?? config.abilities, // ← prefer choice
+          },
+        );
+      } else {
+        game.battle = this.combatEngine.createCpuBattle(
+          game,
+          game.currentTeamId,
+          choice.enemyName,
+          choice.enemyHp ?? 1200,
+          choice.enemyMaxHp ?? choice.enemyHp ?? 1200,
+          {
+            attack: choice.enemyAttack ?? 200,
+            personality: 'aggressive',
+            abilityChance: 0.35,
+            signatureEveryNRounds: 4,
+            signatureMultiplier: 1.6,
+          },
+        );
+      }
     } else {
       const defenderTeam =
         choice.enemyTeamId ??
@@ -859,21 +1085,23 @@ export class GameGateway {
     game.phase = 'story';
     if (choice.nextNodeId) game.currentNodeId = choice.nextNodeId;
 
+    this.clampRotations(game);
+
     this.advanceActivePlayer(game);
     this.broadcastStory();
     this.broadcastState();
     this.broadcastRoomList();
   }
 
+  /* ------------------------------------------------------------------ */
+  /* Random encounter                                                    */
+  /* ------------------------------------------------------------------ */
+
   private handleRandomEncounter(
     game: NonNullable<ReturnType<GameStore['getGame']>>,
     nextNodeId?: string,
     onBattle?: Cutscene,
   ) {
-    /* ---------------------------------------------------------------- */
-    /* 1. Team snapshot                                                   */
-    /* ---------------------------------------------------------------- */
-
     const team = game.teams[game.currentTeamId];
     const alive = team.players.filter((p) => p.status === 'alive');
     const aliveCount = alive.length;
@@ -882,17 +1110,10 @@ export class GameGateway {
         ? alive.reduce((sum, p) => sum + p.hp, 0) / alive.length
         : 0;
 
-    /* ---------------------------------------------------------------- */
-    /* 2. Encounter chance — driven by team state only                    */
-    /* ---------------------------------------------------------------- */
-
-    // How beaten up the team is. Uses max HP if the player has it,
-    // otherwise falls back to 200.
-    const sampleMaxHp = alive[0]?.maxHp ?? 200;
+    const sampleMaxHp = alive[0]?.maxHp ?? 1000;
     const damageRatio =
       sampleMaxHp > 0 ? 1 - Math.min(1, avgHp / sampleMaxHp) : 0;
 
-    // Fewer players alive → more likely to be ambushed.
     const sizeFactor = aliveCount <= 1 ? 0.25 : aliveCount === 2 ? 0.1 : 0;
 
     const encounterChance = 0.4 + damageRatio * 0.2 + sizeFactor;
@@ -902,36 +1123,28 @@ export class GameGateway {
       return;
     }
 
-    /* ---------------------------------------------------------------- */
-    /* 3. Tier — driven by team strength                                  */
-    /* ---------------------------------------------------------------- */
-
-    const teamStrength = aliveCount * 40 + avgHp * 0.6;
+    const teamStrength = aliveCount * 200 + avgHp * 0.6;
 
     const tier: 'low' | 'mid' | 'elite' =
-      teamStrength > 320 ? 'elite' : teamStrength > 180 ? 'mid' : 'low';
-
-    /* ---------------------------------------------------------------- */
-    /* 4. Weighted pools per tier                                         */
-    /* ---------------------------------------------------------------- */
+      teamStrength > 1600 ? 'elite' : teamStrength > 900 ? 'mid' : 'low';
 
     const ENCOUNTER_POOL = {
       low: [
         {
           name: 'THE SHADOW',
-          hp: 900,
-          attack: 12,
+          hp: 1000,
+          attack: 180,
           personality: 'chaotic' as const,
-          abilityChance: 0.15,
+          abilityChance: 0.3,
           signatureEveryNRounds: 0,
           weight: 60,
         },
         {
           name: 'A HOLLOW WRAITH',
-          hp: 1000,
-          attack: 14,
+          hp: 1100,
+          attack: 190,
           personality: 'aggressive' as const,
-          abilityChance: 0.25,
+          abilityChance: 0.35,
           signatureEveryNRounds: 4,
           signatureMultiplier: 1.5,
           weight: 40,
@@ -940,10 +1153,10 @@ export class GameGateway {
       mid: [
         {
           name: 'THE PALE HUNTER',
-          hp: 1200,
-          attack: 16,
+          hp: 1300,
+          attack: 210,
           personality: 'strategic' as const,
-          abilityChance: 0.3,
+          abilityChance: 0.4,
           signatureEveryNRounds: 3,
           signatureMultiplier: 1.7,
           telegraphs: true,
@@ -951,20 +1164,20 @@ export class GameGateway {
         },
         {
           name: 'THE ASHEN CHOIR',
-          hp: 1300,
-          attack: 15,
+          hp: 1400,
+          attack: 220,
           personality: 'chaotic' as const,
-          abilityChance: 0.4,
+          abilityChance: 0.45,
           signatureEveryNRounds: 3,
           signatureMultiplier: 1.6,
           weight: 35,
         },
         {
           name: 'WOLF OF THE HOLLOW',
-          hp: 1100,
-          attack: 18,
+          hp: 1250,
+          attack: 230,
           personality: 'aggressive' as const,
-          abilityChance: 0.2,
+          abilityChance: 0.35,
           signatureEveryNRounds: 5,
           signatureMultiplier: 2.0,
           weight: 20,
@@ -973,10 +1186,10 @@ export class GameGateway {
       elite: [
         {
           name: 'THE HOLLOWED KING',
-          hp: 1600,
-          attack: 20,
+          hp: 1700,
+          attack: 240,
           personality: 'boss' as const,
-          abilityChance: 0.45,
+          abilityChance: 0.5,
           signatureEveryNRounds: 3,
           signatureMultiplier: 1.8,
           telegraphs: true,
@@ -984,10 +1197,10 @@ export class GameGateway {
         },
         {
           name: 'SIR CULLEN, THE LAST KNIGHT',
-          hp: 1500,
-          attack: 19,
+          hp: 1600,
+          attack: 250,
           personality: 'strategic' as const,
-          abilityChance: 0.4,
+          abilityChance: 0.45,
           signatureEveryNRounds: 2,
           signatureMultiplier: 1.9,
           telegraphs: true,
@@ -995,20 +1208,20 @@ export class GameGateway {
         },
         {
           name: 'THE FACELESS MOTHER',
-          hp: 1700,
-          attack: 21,
+          hp: 1800,
+          attack: 260,
           personality: 'chaotic' as const,
-          abilityChance: 0.5,
+          abilityChance: 0.55,
           signatureEveryNRounds: 4,
           signatureMultiplier: 2.1,
           weight: 25,
         },
         {
           name: 'THE THING IN THE BELL',
-          hp: 1400,
-          attack: 23,
+          hp: 1500,
+          attack: 270,
           personality: 'aggressive' as const,
-          abilityChance: 0.35,
+          abilityChance: 0.4,
           signatureEveryNRounds: 3,
           signatureMultiplier: 2.0,
           weight: 15,
@@ -1029,9 +1242,6 @@ export class GameGateway {
     }>;
 
     const encounter = this.weightedPick(pool);
-    /* ---------------------------------------------------------------- */
-    /* 5. Start the battle                                                */
-    /* ---------------------------------------------------------------- */
 
     game.phase = 'battle';
 
@@ -1074,6 +1284,7 @@ export class GameGateway {
     }
     return pool[0];
   }
+
   /* ================================================================== */
   /* Combat queue                                                        */
   /* ================================================================== */
@@ -1186,7 +1397,6 @@ export class GameGateway {
     this.resolvingRound = true;
 
     try {
-      // Auto-fill missing actions with a default attack.
       const expected = this.expectedActors(game, battle);
       const queued = new Set(
         (battle.queuedActions ?? []).map((q) => q.playerId),
@@ -1396,6 +1606,10 @@ export class GameGateway {
       game.pendingNextNodeId = undefined;
     }
 
+    // Recompute rotation indices against the new alive counts after
+    // any deaths that happened during the fight.
+    this.clampRotations(game);
+
     this.advanceActivePlayer(game);
   }
 
@@ -1439,7 +1653,7 @@ export class GameGateway {
   private findPlayer(
     game: NonNullable<ReturnType<GameStore['getGame']>>,
     playerId: string,
-  ) {
+  ): Player | undefined {
     for (const team of Object.values(game.teams)) {
       const player = team.players.find((p) => p.id === playerId);
       if (player) return player;
@@ -1553,6 +1767,7 @@ export class GameGateway {
       }
     }
   }
+
   private handleCreditsDone(client: ConnectedClient) {
     const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
     if (!game) return;
@@ -1561,6 +1776,10 @@ export class GameGateway {
     game.currentNodeId = 'start';
     game.creditsStartedAt = undefined;
     game.creditsDurationMs = undefined;
+
+    // Reset rotation state for a fresh game.
+    game.playerRotation = {};
+    game.lastActivePlayerId = undefined;
 
     this.broadcastState();
   }
