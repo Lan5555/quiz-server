@@ -57,7 +57,7 @@ const ENEMY_PRESSURE_CAP = 1.25;
 const ENRAGE_THRESHOLD = 0.5;
 const ENRAGE_MULT = 1.25;
 
-/** Howl is additive so it can't snowball in long fights. */
+/** Howl is additive so it can't snowball in long fights. Future */
 const HOWL_GAIN_NORMAL = 20;
 const HOWL_GAIN_ENRAGED = 35;
 
