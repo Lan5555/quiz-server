@@ -509,17 +509,92 @@ export class GameGateway {
       return;
     }
 
+    // ------------------------------------------------------------------
+    // 1. Normalize the name
+    // ------------------------------------------------------------------
+    const requestedName = (event.playerName ?? '').trim();
+    const fallbackName = event.playerId.slice(0, 6).toUpperCase();
+    const desiredName = requestedName.length > 0 ? requestedName : fallbackName;
+
+    // ------------------------------------------------------------------
+    // 2. Detect an existing player by id (reconnection case)
+    // ------------------------------------------------------------------
     const existingPlayer = team.players.find(
       (player) => player.id === event.playerId,
     );
 
+    // ------------------------------------------------------------------
+    // 3. Reject duplicate names — but only if it's a NEW player
+    // ------------------------------------------------------------------
+    if (!existingPlayer) {
+      const nameTaken = Object.values(game.teams)
+        .flatMap((t) => t.players)
+        .some(
+          (p) =>
+            p.name.toLowerCase() === desiredName.toLowerCase() &&
+            p.id !== event.playerId, // ignore self (in case of reconnect)
+        );
+
+      if (nameTaken) {
+        this.sendError(
+          client.socket,
+          `The name "${desiredName}" is already taken. Choose another.`,
+        );
+        return;
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // 4. Enforce team caps — only when the room has caps set
+    // ------------------------------------------------------------------
+    const cap = game.teamCaps?.[event.teamId];
+
+    if (cap !== undefined) {
+      // Count only connected players — disconnected ones don't occupy slots.
+      const connectedCount = team.players.filter((p) => p.connected).length;
+
+      // If the player already exists, they don't count as a new slot.
+      if (!existingPlayer && connectedCount >= cap) {
+        this.sendError(
+          client.socket,
+          `Team ${event.teamId} is full (${cap}/${cap}). Choose another team.`,
+        );
+        return;
+      }
+
+      // If the team already has 2 players but the new one is a reconnect,
+      // allow it (they're reclaiming their own slot).
+    }
+
+    // ------------------------------------------------------------------
+    // 5. Reject duplicate sockets — same player joining twice
+    // ------------------------------------------------------------------
+    if (
+      client.playerId &&
+      client.playerId !== event.playerId &&
+      client.roomCode === GLOBAL_ROOM
+    ) {
+      // The client is switching identity. Remove the old one.
+      for (const t of Object.values(game.teams)) {
+        const idx = t.players.findIndex((p) => p.id === client.playerId);
+        if (idx >= 0) {
+          t.players.splice(idx, 1);
+          break;
+        }
+      }
+      this.clampRotations(game);
+    }
+
+    // ------------------------------------------------------------------
+    // 6. Create or reconnect the player
+    // ------------------------------------------------------------------
     if (!existingPlayer) {
       team.players.push({
         id: event.playerId,
-        name: event.playerName ?? event.playerId,
+        name: desiredName,
         teamId: event.teamId,
-        hp: 1000,
-        maxHp: 1000,
+        hp: 2000,
+        maxHp: 2000,
         status: 'alive',
         ready: false,
         connected: true,
@@ -528,8 +603,13 @@ export class GameGateway {
       });
     } else {
       existingPlayer.connected = true;
+      // Keep the name in sync in case they changed it.
+      existingPlayer.name = desiredName;
     }
 
+    // ------------------------------------------------------------------
+    // 7. Join the socket room
+    // ------------------------------------------------------------------
     if (client.roomCode && client.roomCode !== GLOBAL_ROOM) {
       void client.socket.leave(client.roomCode);
     }
@@ -539,7 +619,6 @@ export class GameGateway {
     client.roomCode = GLOBAL_ROOM;
     client.watcher = false;
 
-    // New joins shouldn't break rotation indices.
     this.clampRotations(game);
 
     this.broadcastStory();

@@ -29,7 +29,7 @@ const SKILL_DAMAGE: Record<SkillId, [number, number]> = {
 };
 
 const HEAL_AMOUNT: Record<HealId, number> = {
-  minor_heal: 240,
+  minor_heal: 340,
   major_heal: 520,
 };
 
