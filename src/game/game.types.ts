@@ -267,7 +267,19 @@ export type GameEvent =
     }
   | { type: 'ROUND_TIMER'; remainingMs: number }
   | { type: 'CREDITS'; durationMs?: number; startedAt?: number }
-  | { type: 'CREDITS_DONE' };
+  | { type: 'CREDITS_DONE' }
+  | { type: 'ADMIN_KICK_PLAYER'; playerId: string }
+  | { type: 'PLAYER_LIST_UPDATE'; players: AdminPlayerSummary[] };
+export interface AdminPlayerSummary {
+  id: string;
+  name: string;
+  teamId: TeamId;
+  hp: number;
+  maxHp: number;
+  status: 'alive' | 'eliminated' | 'defeated' | 'spectator';
+  connected: boolean;
+  ready: boolean;
+}
 
 interface BattleBase {
   id: string;

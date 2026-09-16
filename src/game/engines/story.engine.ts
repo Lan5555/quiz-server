@@ -10,11 +10,11 @@ export class StoryEngine {
       id: 'start',
       title: 'THE HIGHLANDS',
       text:
-        'The four teams awaken beneath a blood-red sky. ' +
+        'Four teams wake beneath a sky the colour of old blood. ' +
         'A ruined cathedral surrounds them, its doors sealed from the outside. ' +
-        'Nobody remembers how they arrived. ' +
-        'Nobody remembers the journey. ' +
-        'But somewhere beyond the mountains, something remembers them.',
+        'Nobody remembers how they arrived. Nobody remembers the journey. ' +
+        'But the walls remember. And somewhere beyond the mountains, ' +
+        'someone is still whispering a name that none of them can hear yet.',
       background: '/images/cathedral.jpg',
 
       onEnter: {
@@ -69,31 +69,91 @@ export class StoryEngine {
           id: 'inspect_gate',
           text: 'Approach the ancient gate',
           result: 'safe',
-          nextNodeId: 'gate',
+          nextNodeId: 'the_long_walk',
         },
         {
           id: 'descend_cliff',
           text: 'Search the cliffs',
           result: 'random',
-          nextNodeId: 'gate',
+          nextNodeId: 'the_long_walk',
         },
         {
           id: 'search_cathedral',
           text: 'Search the cathedral',
+          result: 'safe',
+          nextNodeId: 'the_long_walk',
+        },
+      ],
+    },
+
+    /* ================================================================ */
+    /* THE LONG WALK — new transitional node                            */
+    /* ================================================================ */
+
+    the_long_walk: {
+      id: 'the_long_walk',
+      title: 'THE LONG WALK',
+      text:
+        'The cathedral opens onto a road that should not exist. ' +
+        'It runs the length of the valley, straight and old and quiet. ' +
+        'There are lanterns along it, lit one by one, as if someone ' +
+        'has been walking ahead of them for years, keeping them burning. ' +
+        'Every few hundred paces, the road passes a small stone with a name on it. ' +
+        'Some of the names belong to people in the party. ' +
+        'None of them remember dying.',
+      background: '/images/village.jpg',
+
+      onEnter: {
+        id: 'long-walk',
+        once: true,
+        lines: [
+          {
+            id: 'walk-01',
+            speaker: 'The Chronicler',
+            text: 'Stay on the road.',
+            duration: 3000,
+            tone: 'mystic',
+            voice: '/audio/vo/been_here_before.mp3',
+          },
+        ],
+      },
+
+      choices: [
+        {
+          id: 'walk_on',
+          text: 'Walk on, in silence',
+          result: 'safe',
+          nextNodeId: 'gate',
+        },
+        {
+          id: 'read_stones',
+          text: 'Read the stones as you pass',
+          result: 'random',
+          nextNodeId: 'gate',
+        },
+        {
+          id: 'wait',
+          text: 'Wait, and listen',
           result: 'safe',
           nextNodeId: 'gate',
         },
       ],
     },
 
+    /* ================================================================ */
+    /* THE GATE — PvP #1                                                */
+    /* ================================================================ */
+
     gate: {
       id: 'gate',
       title: 'THE GATE',
       text:
         'A colossal gate stands between the teams and the mountain. ' +
-        'Names are carved into the stone. ' +
-        'Some belong to people standing beside you. ' +
-        'Others belong to people nobody remembers.',
+        'Names are carved into the stone — some of them belong to the people ' +
+        'standing beside you, others to people none of you have ever met. ' +
+        'But all of them are warm to the touch. ' +
+        'As the teams approach, the gate notices them. ' +
+        'It does not open. It waits. It is patient the way only things that have never been in a hurry can be.',
       background: '/images/gate.jpg',
 
       onEnter: {
@@ -178,13 +238,20 @@ export class StoryEngine {
       ],
     },
 
+    /* ================================================================ */
+    /* THE CATHEDRAL                                                    */
+    /* ================================================================ */
+
     cathedral: {
       id: 'cathedral',
       title: 'THE CATHEDRAL',
       text:
         'The altar is covered in symbols. ' +
-        'The same four symbols appear again and again: ' +
-        'a raven, a serpent, a dragon and a wolf.',
+        'The same four appear again and again — a raven, a serpent, a dragon and a wolf. ' +
+        'Someone has been praying here for a very long time. ' +
+        'The kneeler is worn through to the stone. ' +
+        'On the far wall, there is a line of small hooks, empty. ' +
+        "They are the height of a child's coat.",
       background: '/images/cathedral.jpg',
 
       onEnter: {
@@ -223,17 +290,71 @@ export class StoryEngine {
           id: 'touch_symbol',
           text: 'Touch the symbol',
           result: 'random',
-          nextNodeId: 'blessing',
+          nextNodeId: 'the_chapel_below',
         },
         {
           id: 'read_symbols',
           text: 'Study the four symbols',
           result: 'safe',
-          nextNodeId: 'blessing',
+          nextNodeId: 'the_chapel_below',
         },
         {
           id: 'pray',
           text: 'Kneel and pray',
+          result: 'safe',
+          nextNodeId: 'the_chapel_below',
+        },
+      ],
+    },
+
+    /* ================================================================ */
+    /* THE CHAPEL BELOW — new                                       */
+    /* ================================================================ */
+
+    the_chapel_below: {
+      id: 'the_chapel_below',
+      title: 'THE CHAPEL BELOW',
+      text:
+        'Beneath the cathedral, there is another room. Smaller. Warmer. ' +
+        'The pews here are child-sized, and each one has a small name carved ' +
+        'into the wood at eye level. ' +
+        'Four of the pews are still warm. ' +
+        'The others have not been sat in for a very long time. ' +
+        'There is a music box on the altar, and it is still playing, ' +
+        'very softly, a lullaby none of the teams can name but all of them know.',
+      background: '/images/cathedral.jpg',
+
+      onEnter: {
+        id: 'chapel-below',
+        once: true,
+        lines: [
+          {
+            id: 'chapel-01',
+            speaker: 'The Chronicler',
+            text: 'They waited for you here.',
+            duration: 3400,
+            tone: 'mystic',
+            voice: '/audio/vo/house_unknown_01.mp3',
+          },
+        ],
+      },
+
+      choices: [
+        {
+          id: 'listen_music',
+          text: 'Listen to the music box',
+          result: 'safe',
+          nextNodeId: 'blessing',
+        },
+        {
+          id: 'open_music_box',
+          text: 'Open the music box',
+          result: 'random',
+          nextNodeId: 'blessing',
+        },
+        {
+          id: 'leave_chapel',
+          text: 'Leave the chapel undisturbed',
           result: 'safe',
           nextNodeId: 'blessing',
         },
@@ -244,8 +365,10 @@ export class StoryEngine {
       id: 'blessing',
       title: 'A MOMENT OF PEACE',
       text:
-        'The whispers soften. For one brief moment, the Highlands feels almost peaceful. ' +
-        'The team catches its breath.',
+        'The whispers soften. For one brief moment, the Highlands feels almost kind. ' +
+        'The team catches its breath. ' +
+        'Someone laughs — quietly, involuntarily — and no one is sure who. ' +
+        'It is the first sound any of them has made that was not afraid.',
       background: '/images/cathedral.jpg',
 
       choices: [
@@ -270,13 +393,19 @@ export class StoryEngine {
       ],
     },
 
+    /* ================================================================ */
+    /* THE ABYSS                                                        */
+    /* ================================================================ */
+
     cliff: {
       id: 'cliff',
       title: 'THE ABYSS',
       text:
         'The mountain ends abruptly at a massive cliff. ' +
-        'There is no bottom. ' +
-        'Only darkness.',
+        'There is no bottom. Only darkness. ' +
+        'And yet — faintly — from very far below, someone is humming a lullaby. ' +
+        'It is the same lullaby the music box in the chapel was playing. ' +
+        'It is being hummed by a voice that is trying very hard not to cry.',
       background: '/images/cliff.jpg',
 
       onEnter: {
@@ -324,13 +453,19 @@ export class StoryEngine {
       ],
     },
 
-    /* Echo Beast — damage race, no healing */
+    /* ================================================================ */
+    /* THE ECHO — Echo Beast                                            */
+    /* ================================================================ */
+
     echo: {
       id: 'echo',
       title: 'THE ECHO',
       text:
-        'A voice comes from behind you. ' +
-        'When you turn around, nobody is there.',
+        'A voice comes from behind you. When you turn around, nobody is there. ' +
+        'But the voice is not angry. It is tired. ' +
+        'It has been waiting a very long time to be heard. ' +
+        'And when it speaks again, the trees go quiet. ' +
+        'Something in the forest is listening. Something with teeth.',
       background: '/images/forest.jpg',
 
       onEnter: {
@@ -369,7 +504,7 @@ export class StoryEngine {
           id: 'follow_echo',
           text: 'Follow the voice (CPU: Echo Beast)',
           result: 'battle',
-          nextNodeId: 'memory',
+          nextNodeId: 'the_mirror_hall',
           enemyName: 'ECHO BEAST',
           enemyHp: 3800,
           enemyMaxHp: 3800,
@@ -402,26 +537,87 @@ export class StoryEngine {
           id: 'ignore_echo',
           text: 'Ignore the voice',
           result: 'safe',
-          nextNodeId: 'memory',
+          nextNodeId: 'the_mirror_hall',
         },
         {
           id: 'look_longer',
           text: 'Look deeper into the memory',
           result: 'random',
+          nextNodeId: 'the_mirror_hall',
+        },
+      ],
+    },
+
+    /* ================================================================ */
+    /* THE MIRROR HALL — new                                       */
+    /* ================================================================ */
+
+    the_mirror_hall: {
+      id: 'the_mirror_hall',
+      title: 'THE MIRROR HALL',
+      text:
+        'The forest opens into a long corridor of glass. ' +
+        'Every panel is a mirror, and every mirror shows a different version ' +
+        'of the same room — a kitchen, a nursery, a hospital bed, a doorway, ' +
+        'four candles, a hand held one last time. ' +
+        'None of the reflections look at the team. ' +
+        'They are all looking at someone the team cannot see. ' +
+        'At the end of the hall, one mirror is empty. ' +
+        'On its surface, written in soot: *this is where you were, the first time.*',
+      background: '/images/old_house.jpg',
+
+      onEnter: {
+        id: 'mirror-hall',
+        once: true,
+        lines: [
+          {
+            id: 'mirror-01',
+            speaker: 'The Chronicler',
+            text: 'You have walked past this before.',
+            duration: 4200,
+            tone: 'dark',
+            voice: '/audio/vo/house_unknown_02.mp3',
+          },
+        ],
+      },
+
+      choices: [
+        {
+          id: 'touch_mirror',
+          text: 'Touch the empty mirror',
+          result: 'random',
+          nextNodeId: 'memory',
+        },
+        {
+          id: 'walk_past',
+          text: 'Walk past, without stopping',
+          result: 'safe',
+          nextNodeId: 'memory',
+        },
+        {
+          id: 'speak_to_it',
+          text: 'Speak to the mirror',
+          result: 'safe',
           nextNodeId: 'memory',
         },
       ],
     },
 
+    /* ================================================================ */
+    /* THE MEMORY                                                       */
+    /* ================================================================ */
+
     memory: {
       id: 'memory',
       title: "A MEMORY THAT ISN'T YOURS",
       text:
-        'The world changes. ' +
-        'For a moment, the Highlands disappears. ' +
-        'You see a village burning beneath the mountain. ' +
-        'But the flames do not move. The smoke does not rise. ' +
-        'It is a painting. A lie painted on the inside of your eyes.',
+        'The world changes. For a moment, the Highlands disappears. ' +
+        'You see a small house in a valley, at dusk. ' +
+        'Dinner is on the table. Four chairs are set. Only one is occupied. ' +
+        'The man at the table is not eating. He is waiting. ' +
+        'It is the kind of waiting that has stopped hoping and continued anyway. ' +
+        'On the far chair, there is a coat that is too small for him. ' +
+        'He has not moved it in a very long time.',
       background: '/images/burning_village.jpg',
 
       onEnter: {
@@ -489,9 +685,13 @@ export class StoryEngine {
       id: 'burning_house',
       title: 'THE BURNING HOUSE',
       text:
-        'Flames consume the old house. ' +
-        'Yet the photographs refuse to burn. ' +
-        'A familiar voice speaks from behind you.',
+        'Flames consume the small house. ' +
+        'Yet the photographs on the wall refuse to burn. ' +
+        'A familiar voice speaks from behind you. ' +
+        'He is not angry that you are here. He is only tired. ' +
+        'When he steps out of the smoke, there is ash on his hands, ' +
+        'and he does not bother to wipe it away. ' +
+        'He has stopped bothering a long time ago.',
       background: '/images/burning_house.jpg',
 
       onEnter: {
@@ -539,16 +739,21 @@ export class StoryEngine {
       ],
     },
 
+    /* ================================================================ */
+    /* THE QUIET VILLAGE                                                */
+    /* ================================================================ */
+
     village: {
       id: 'village',
-      title: 'THE DEAD VILLAGE',
+      title: 'THE QUIET VILLAGE',
       text:
-        'An abandoned village sits beneath the mountain. ' +
-        'There are no bodies. ' +
-        'There are no animals. ' +
-        'There is not even wind. ' +
-        'But in the center of the square, four fresh graves have been dug. ' +
-        'Each one is the exact size of a team member.',
+        'A village sits beneath the mountain. ' +
+        'There are no bodies. There are no animals. There is not even wind. ' +
+        'But in the centre of the square, four fresh graves have been dug, ' +
+        'and the shovels are still standing in the dirt. ' +
+        'Whoever dug them has only just stopped. ' +
+        'There is a fifth grave, off to the side, older than the others, ' +
+        'and it has been dug and refilled so many times the earth has turned to dust.',
       background: '/images/village.jpg',
 
       onEnter: {
@@ -602,9 +807,11 @@ export class StoryEngine {
       text:
         'Photographs cover the walls. ' +
         'Every photograph contains one of the four teams. ' +
-        'Some photographs are impossibly old. ' +
-        'In one of them, Nicholas Johnson stands beside a woman ' +
-        'who has your face.',
+        'Some of them are impossibly old. ' +
+        'In one, a man stands beside a woman who has your face. ' +
+        'They are laughing. You have never heard that sound before. ' +
+        'But somehow, you know exactly what it sounds like — ' +
+        'the way you know the shape of your own hands in the dark.',
       background: '/images/old_house.jpg',
 
       onEnter: {
@@ -656,9 +863,13 @@ export class StoryEngine {
       id: 'journal',
       title: 'THE JOURNAL',
       text:
-        "The journal is written in Nicholas Johnson's handwriting. " +
+        'The journal is written in a careful hand. ' +
         'The entries describe people arriving at the Highlands long before tonight. ' +
-        'The final entry is dated tomorrow.',
+        'Some names you recognise. Most you do not. ' +
+        'The final entry is dated tomorrow. It has only one line: ' +
+        '"I hope they forgive me." ' +
+        'The ink at the end of the line has been blown on — the page is slightly warped, ' +
+        'the way paper warps when someone has been crying on it.',
       background: '/images/journal.jpg',
 
       onEnter: {
@@ -685,7 +896,7 @@ export class StoryEngine {
             id: 'journal-03',
             speaker: 'Nicholas Johnson',
             text: 'Day 42. I have stopped asking for forgiveness.',
-            duration: 4200,
+            duration: 4000,
             tone: 'broken',
             voice: '/audio/vo/nicholas_journal_03.mp3',
           },
@@ -722,7 +933,10 @@ export class StoryEngine {
       ],
     },
 
-    /* Bell Keeper — heals via Mend */
+    /* ================================================================ */
+    /* THE BELL TOWER                                                   */
+    /* ================================================================ */
+
     bell_tower: {
       id: 'bell_tower',
       title: 'THE BELL TOWER',
@@ -730,7 +944,11 @@ export class StoryEngine {
         'A gigantic bell hangs above the tower. ' +
         'Its surface is covered with names. ' +
         'One of the names is yours. ' +
-        'It has been crossed out and rewritten fourteen times.',
+        'It has been crossed out, and rewritten, and crossed out again, ' +
+        'fourteen times. Whoever did it did it slowly. ' +
+        'Every line is straight. Every line is patient. ' +
+        'At the base of the tower, someone has left four small pairs of shoes, ' +
+        'lined up neatly, waiting for their owners to come back for them.',
       background: '/images/bell_tower.jpg',
 
       onEnter: {
@@ -791,15 +1009,21 @@ export class StoryEngine {
       ],
     },
 
-    /* Blood Hunters — heal by draining */
+    /* ================================================================ */
+    /* THE BLOOD HUNTERS                                                */
+    /* ================================================================ */
+
     blood_hunters: {
       id: 'blood_hunters',
       title: 'THE BLOOD HUNTERS',
       text:
         'Masked hunters surround the path. ' +
-        'Their weapons are stained with blood, but none of them looks afraid. ' +
-        'When they remove their masks, they have your face. ' +
-        'All of them.',
+        'Their weapons are stained with blood. None of them looks afraid. ' +
+        'When they remove their masks, they have your face. All of them. ' +
+        'They are the versions of you who learned to stop feeling. ' +
+        'They do not fight like animals. They fight like people who have been ' +
+        'waiting for this exact fight for years — carefully, methodically, ' +
+        'with the terrible calm of the truly lost.',
       background: '/images/hunters.jpg',
 
       onEnter: {
@@ -860,16 +1084,21 @@ export class StoryEngine {
       ],
     },
 
-    /* Remnant — heals via both Mend and Drain */
+    /* ================================================================ */
+    /* THE GRAVEYARD                                                    */
+    /* ================================================================ */
+
     graveyard: {
       id: 'graveyard',
       title: 'THE GRAVEYARD',
       text:
         'Hundreds of graves surround the path. ' +
-        'Every grave carries a name belonging to someone you recognize. ' +
-        'Except one. ' +
+        'Every grave carries a name you recognise. Except one. ' +
         'The oldest grave bears your name. ' +
-        'The date of death is two hundred years before you were born.',
+        'The date of death is two hundred years before you were born. ' +
+        'The flowers on it are fresh. ' +
+        'Someone has been coming here, every year, for a very long time, ' +
+        'to put flowers on the grave of a person they could not save.',
       background: '/images/graveyard.jpg',
 
       onEnter: {
@@ -932,7 +1161,7 @@ export class StoryEngine {
           id: 'challenge_gravekeeper',
           text: 'Challenge the Gravekeeper (CPU)',
           result: 'battle',
-          nextNodeId: 'team_crossroads',
+          nextNodeId: 'the_room_of_small_hands',
           enemyName: 'THE REMNANT',
           enemyHp: 4800,
           enemyMaxHp: 4800,
@@ -943,16 +1172,74 @@ export class StoryEngine {
           id: 'open_grave_2',
           text: 'Open one of the graves',
           result: 'random',
-          nextNodeId: 'team_crossroads',
+          nextNodeId: 'the_room_of_small_hands',
         },
         {
           id: 'leave_graveyard',
           text: 'Leave the graveyard',
           result: 'safe',
+          nextNodeId: 'the_room_of_small_hands',
+        },
+      ],
+    },
+
+    /* ================================================================ */
+    /* THE ROOM OF SMALL HANDS — new                                */
+    /* ================================================================ */
+
+    the_room_of_small_hands: {
+      id: 'the_room_of_small_hands',
+      title: 'THE ROOM OF SMALL HANDS',
+      text:
+        'Past the graveyard, there is a room that should not be here. ' +
+        'It is warm. There is a fireplace. There are four beds, made up neatly. ' +
+        'On the bedside table of one of them, there is a half-finished cup of tea, ' +
+        'gone cold, with a small handprint on the side of the mug. ' +
+        'There is no dust in this room. ' +
+        'Someone cleans it every day. ' +
+        'Someone has been cleaning it every day for two hundred years.',
+      background: '/images/old_house.jpg',
+
+      onEnter: {
+        id: 'room-small-hands',
+        once: true,
+        lines: [
+          {
+            id: 'hands-01',
+            speaker: 'The Chronicler',
+            text: 'He kept their rooms exactly as they were.',
+            duration: 5200,
+            tone: 'tragic',
+            voice: '/audio/vo/memory_woman_01.mp3',
+          },
+        ],
+      },
+
+      choices: [
+        {
+          id: 'sit_on_bed',
+          text: 'Sit on one of the beds',
+          result: 'random',
+          nextNodeId: 'team_crossroads',
+        },
+        {
+          id: 'leave_room',
+          text: 'Leave the room untouched',
+          result: 'safe',
+          nextNodeId: 'team_crossroads',
+        },
+        {
+          id: 'take_mug',
+          text: 'Pick up the cold mug of tea',
+          result: 'safe',
           nextNodeId: 'team_crossroads',
         },
       ],
     },
+
+    /* ================================================================ */
+    /* ACT II — FOUR HOUSES                                             */
+    /* ================================================================ */
 
     team_crossroads: {
       id: 'team_crossroads',
@@ -960,7 +1247,12 @@ export class StoryEngine {
       text:
         'The four teams finally stand together. ' +
         'Ravens. Serpents. Dragons. Wolves. ' +
-        'For the first time, everyone understands that the Highlands was built for them.',
+        'For the first time, everyone understands that the Highlands was built for them — ' +
+        'and that they are not the first four houses to stand here. ' +
+        'They are only the most recent. ' +
+        'Beneath their feet, the stone is worn into a shallow groove, ' +
+        'the way stone wears when it has been stood on by the same four people ' +
+        'for a very long time.',
       background: '/images/courtyard.jpg',
 
       onEnter: {
@@ -1096,7 +1388,10 @@ export class StoryEngine {
       text:
         'The battlefield falls silent. ' +
         'The survivors stare at one another. ' +
-        'Then someone begins to laugh.',
+        'Then someone begins to laugh. Not because it is funny. ' +
+        'Because they have just realised that this is exactly what he wanted — ' +
+        'and that they have been doing it, again and again, for two hundred years, ' +
+        'and that the ground beneath them has never once been clean.',
       background: '/images/courtyard.jpg',
 
       onEnter: {
@@ -1115,7 +1410,7 @@ export class StoryEngine {
             id: 'war-02',
             speaker: 'Nicholas Johnson',
             text: 'You are finally becoming what I knew you would become.',
-            duration: 4900,
+            duration: 4300,
             tone: 'pleased',
             voice: '/audio/vo/nicholas_war_02.mp3',
           },
@@ -1135,18 +1430,72 @@ export class StoryEngine {
           id: 'seek_nicholas',
           text: 'Find Nicholas',
           result: 'safe',
-          nextNodeId: 'alliance',
+          nextNodeId: 'the_seventh_door',
         },
         {
           id: 'continue_mountain',
           text: 'Continue toward the mountain',
           result: 'safe',
-          nextNodeId: 'alliance',
+          nextNodeId: 'the_seventh_door',
         },
         {
           id: 'search_bodies',
           text: 'Search the bodies',
           result: 'random',
+          nextNodeId: 'the_seventh_door',
+        },
+      ],
+    },
+
+    /* ================================================================ */
+    /* THE SEVENTH DOOR — new                                       */
+    /* ================================================================ */
+
+    the_seventh_door: {
+      id: 'the_seventh_door',
+      title: 'THE SEVENTH DOOR',
+      text:
+        'The path leads to a small wooden door set into the mountainside. ' +
+        'It is the seventh door along this wall. ' +
+        'The other six are sealed, bricked up from the outside, each with a date. ' +
+        'The seventh door is not sealed. ' +
+        'Someone has been opening it, and closing it, and opening it again, ' +
+        'for a very long time. ' +
+        'The handle is warm.',
+      background: '/images/mountain.jpg',
+
+      onEnter: {
+        id: 'seventh-door',
+        once: true,
+        lines: [
+          {
+            id: 'door-01',
+            speaker: 'The Chronicler',
+            text: 'He comes through here every night, to check.',
+            duration: 4800,
+            tone: 'dark',
+            voice: '/audio/vo/house_unknown_01.mp3',
+          },
+        ],
+      },
+
+      choices: [
+        {
+          id: 'open_door',
+          text: 'Open the seventh door',
+          result: 'safe',
+          nextNodeId: 'alliance',
+        },
+        {
+          id: 'listen_behind',
+          text: 'Listen behind the door',
+          result: 'random',
+          nextNodeId: 'alliance',
+        },
+        {
+          id: 'leave_closed',
+          text: 'Leave it closed',
+          result: 'safe',
           nextNodeId: 'alliance',
         },
       ],
@@ -1158,7 +1507,11 @@ export class StoryEngine {
       text:
         'The surviving members finally understand the truth. ' +
         'The teams were never meant to escape separately. ' +
-        'They were meant to destroy one another.',
+        'They were meant to destroy one another — ' +
+        'because that is what he has been training them for, ' +
+        'one night at a time, for two hundred years. ' +
+        'When they look at each other now, they do not see enemies. ' +
+        'They see people who have been through the same long night.',
       background: '/images/mountain.jpg',
 
       onEnter: {
@@ -1214,14 +1567,21 @@ export class StoryEngine {
       ],
     },
 
-    /* Hollow Knights — heals via Mend + phase heal */
+    /* ================================================================ */
+    /* MOUNTAIN PATH                                                    */
+    /* ================================================================ */
+
     mountain_path: {
       id: 'mountain_path',
       title: 'THE MOUNTAIN PATH',
       text:
         'The path narrows as the mountain rises. ' +
-        'Ancient armor lies scattered across the snow. ' +
-        'Every suit of armor is sized for a child.',
+        'Ancient armour lies scattered across the snow. ' +
+        'Every suit of armour is sized for a child. ' +
+        'Someone here has been fighting for a very long time, ' +
+        'and losing, and getting back up, and losing again. ' +
+        'The snow is falling slowly. ' +
+        'It is the only thing in the Highlands that has ever been gentle.',
       background: '/images/mountain.jpg',
 
       choices: [
@@ -1281,16 +1641,23 @@ export class StoryEngine {
       ],
     },
 
+    /* ================================================================ */
+    /* THE TRUTH                                                        */
+    /* ================================================================ */
+
     truth: {
       id: 'truth',
       title: 'THE TRUTH',
       text:
         'The mountain opens. ' +
-        'A massive chamber lies beneath it. ' +
-        'Screens display memories of the four teams. ' +
-        'Hundreds of them. ' +
-        'And in the center of the chamber, a single chair. ' +
-        'The chair is warm. Someone has been sitting in it.',
+        'A small room lies beneath it, warm and quiet and clean. ' +
+        'Photographs line the walls. Hundreds of them. ' +
+        'Every one of them is a night someone arrived at the Highlands. ' +
+        'Every one of them is a night someone did not leave. ' +
+        'In the centre of the room is a chair. The chair is still warm. ' +
+        'And there is a small table beside it with four candles on it. ' +
+        'Three have burned out. The fourth is still lit. ' +
+        'It has been kept lit, through every single cycle, without ever going out.',
       background: '/images/sanctum.jpg',
 
       onEnter: {
@@ -1370,13 +1737,22 @@ export class StoryEngine {
       ],
     },
 
+    /* ================================================================ */
+    /* THE FINAL DUEL — PvP #2                                          */
+    /* ================================================================ */
+
     final_duel: {
       id: 'final_duel',
       title: 'THE FINAL DUEL',
       text:
-        'The machine hums. ' +
-        'The surviving teams stand in the chamber. ' +
-        'Nicholas speaks from everywhere and nowhere at once.',
+        'The room is quiet. ' +
+        'The surviving teams stand in it, breathing. ' +
+        'Nicholas speaks from everywhere and nowhere at once. ' +
+        'His voice is the voice of a man who has been talking to himself ' +
+        'for two hundred years. ' +
+        'Below them, the stone floor has been worn into grooves. ' +
+        'The exact shape of four teams, standing where they are standing now, ' +
+        'a thousand times before.',
       background: '/images/sanctum.jpg',
 
       onEnter: {
@@ -1506,14 +1882,21 @@ export class StoryEngine {
       ],
     },
 
+    /* ================================================================ */
+    /* ACT IV — THE CONFESSION                                          */
+    /* ================================================================ */
+
     confession: {
       id: 'confession',
       title: 'THE CONFESSION',
       text:
         'Nicholas finally appears. ' +
-        'There is no throne. ' +
-        'No armor. ' +
-        'Only a tired man standing beside a machine that should never have existed.',
+        'There is no throne. No armour. ' +
+        'Only a tired man standing beside a small table. ' +
+        'On the table, four candles. Three have burned out. ' +
+        'The fourth is still lit. ' +
+        'When he speaks, he does not look at the team. ' +
+        'He looks at the candle, and he keeps looking at it, the whole time.',
       background: '/images/sanctum.jpg',
 
       onEnter: {
@@ -1616,7 +1999,9 @@ export class StoryEngine {
         'Nicholas lowers his weapon. ' +
         'For the first time, he appears afraid. ' +
         'But his eyes are not afraid. ' +
-        'His eyes are hungry.',
+        'His eyes are the eyes of a man who has been alone for two hundred years, ' +
+        'and who has just realised that the only people who ever came back to visit him ' +
+        'were people he made out of his own grief.',
       background: '/images/sanctum.jpg',
 
       onEnter: {
@@ -1693,9 +2078,11 @@ export class StoryEngine {
       title: 'THE PRICE OF TRUST',
       text:
         'Someone steps forward. ' +
-        'The machine recognizes the choice. ' +
+        'The machine recognises the choice. ' +
         'The entire mountain begins to shake. ' +
-        'And somewhere far below, something begins to laugh.',
+        'And somewhere far below, something begins to laugh. ' +
+        'It is not a cruel laugh. ' +
+        'It is the laugh of a man who has finally, finally, been allowed to stop pretending.',
       background: '/images/sanctum.jpg',
 
       onEnter: {
@@ -1739,16 +2126,20 @@ export class StoryEngine {
       ],
     },
 
-    /* Sanctum — Nicholas's first form, 2 phases, full abilities */
+    /* ================================================================ */
+    /* THE SANCTUM                                                      */
+    /* ================================================================ */
+
     sanctum: {
       id: 'sanctum',
       title: 'THE SANCTUM',
       text:
-        'Thousands of memories float inside transparent chambers. ' +
+        'Thousands of small lights float in the room. ' +
         'People you met. People you lost. People you cannot remember. ' +
-        'In every single chamber, the face is the same. ' +
-        'It is your face. ' +
-        'Every soul Nicholas ever trapped looks exactly like you.',
+        'In every light, the face is the same. It is your face. ' +
+        'Every soul Nicholas ever kept looks exactly like you. ' +
+        'And every one of them is smiling. ' +
+        'They are smiling the way people smile when they are finally warm.',
       background: '/images/sanctum.jpg',
 
       onEnter: {
@@ -1860,14 +2251,21 @@ export class StoryEngine {
       ],
     },
 
-    /* Nicholas boss — second encounter, 2 phases, all abilities */
+    /* ================================================================ */
+    /* NICHOLAS BOSS                                                    */
+    /* ================================================================ */
+
     nicholas_boss: {
       id: 'nicholas_boss',
       title: 'NICHOLAS JOHNSON',
       text:
-        'The machine awakens. ' +
-        'Nicholas stands at its center. ' +
-        'The memories of every previous cycle begin screaming around him.',
+        'The room grows warm. ' +
+        'Nicholas stands at the centre of it. ' +
+        'The small lights around him begin to whisper all at once — ' +
+        'not angry, not afraid, only sad. ' +
+        'They are the sounds of every night he has spent trying to fix this. ' +
+        'When he raises his hand, the air around him shimmers. ' +
+        'He has done this two hundred times. He is very good at it.',
       background: '/images/nicholas_boss.jpg',
 
       onEnter: {
@@ -2017,14 +2415,21 @@ export class StoryEngine {
       ],
     },
 
-    /* Final choice — three endings */
+    /* ================================================================ */
+    /* FINAL CHOICE                                                     */
+    /* ================================================================ */
+
     final_choice: {
       id: 'final_choice',
       title: 'THE LAST MEMORY',
       text:
         'Nicholas falls to his knees. ' +
-        'The machine is collapsing. ' +
-        'The Highlands is dying around you.',
+        'The room is coming apart. ' +
+        'The small lights are flickering out, one by one, ' +
+        'gently, like candles being blown out by someone who loves them. ' +
+        'He is watching them go and he is not trying to stop them. ' +
+        'For the first time in two hundred years, he is watching them go ' +
+        'and letting them.',
       background: '/images/nicholas_boss.jpg',
 
       onEnter: {
@@ -2214,19 +2619,23 @@ export class StoryEngine {
       ],
     },
 
-    /* Endings */
+    /* ================================================================ */
+    /* ENDINGS                                                          */
+    /* ================================================================ */
+
     ending_destroy: {
       id: 'ending_destroy',
       title: 'THE END OF THE HIGHLANDS',
       text:
-        'The machine collapses. ' +
-        'The mountain begins to fall. ' +
-        'Every memory stored inside the Highlands disappears. ' +
-        'Every soul. Every clone. Every version of you. ' +
+        'The room goes quiet. ' +
+        'The small lights fade, one by one. ' +
+        'Every soul Nicholas ever kept is finally allowed to rest. ' +
+        'Every version of you. Every version of them. ' +
         'The four teams. The villagers. The children. ' +
-        'All of them were Nicholas. ' +
-        'All of them were you. ' +
-        'And you have just killed every single one.',
+        'All of them were him. All of them were you. ' +
+        'And you have just given every single one of them permission to stop hurting. ' +
+        'It is the kindest thing anyone has ever done for him, ' +
+        'and he will never know it was you.',
       background: '/images/gate.jpg',
 
       onEnter: {
@@ -2260,19 +2669,13 @@ export class StoryEngine {
         ],
       },
 
-      choices: [
-        {
-          id: 'finish',
-          text: 'Finish',
-          result: 'credits',
-        },
-      ],
+      choices: [{ id: 'finish', text: 'Finish', result: 'credits' }],
     },
 
     ending_memory: {
       id: 'ending_memory',
       title: 'THE MEMORY REMAINS',
-      text: 'The machine survives. The memories remain. But Nicholas is gone.',
+      text: 'The room survives. The small lights remain. But Nicholas is gone.',
       background: '/images/sanctum.jpg',
       onEnter: {
         id: 'memory-ending',
@@ -2296,21 +2699,18 @@ export class StoryEngine {
           },
         ],
       },
-      choices: [
-        {
-          id: 'finish',
-          text: 'Finish',
-          result: 'credits',
-        },
-      ],
+      choices: [{ id: 'finish', text: 'Finish', result: 'credits' }],
     },
 
     ending_nicholas: {
       id: 'ending_nicholas',
       title: 'THE MAN WHO REMEMBERED',
       text:
-        'You choose not to destroy the memories. ' +
-        'Instead, you allow Nicholas to finally let them go. ' +
+        'You choose not to destroy the small lights. ' +
+        'Instead, you sit beside him, and you let him finally put them down. ' +
+        'One at a time. Gently. ' +
+        'The candle on the table — the one that never went out — ' +
+        'you blow it out together, at the very end. ' +
         'For the first time, the Highlands becomes silent.',
       background: '/images/sanctum.jpg',
       onEnter: {
@@ -2367,16 +2767,13 @@ export class StoryEngine {
           },
         ],
       },
-      choices: [
-        {
-          id: 'finish',
-          text: 'Finish',
-          result: 'credits',
-        },
-      ],
+      choices: [{ id: 'finish', text: 'Finish', result: 'credits' }],
     },
 
-    /* Legacy nodes */
+    /* ================================================================ */
+    /* LEGACY SIDE NODES                                                */
+    /* ================================================================ */
+
     tower: {
       id: 'tower',
       title: 'THE WATCHTOWER',

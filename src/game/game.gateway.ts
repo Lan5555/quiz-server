@@ -16,7 +16,7 @@ import {
 import { GameStore, GLOBAL_ROOM_CODE } from './game.store';
 import { StoryEngine } from './engines/story.engine';
 import { CombatEngine } from './engines/combat.engine';
-import type { CpuAbilityId, CpuPhase } from './game.types';
+import type { AdminPlayerSummary, CpuAbilityId, CpuPhase } from './game.types';
 
 interface ConnectedClient {
   socket: Socket;
@@ -35,9 +35,7 @@ const ENEMY_RETALIATE_DELAY_MS = 1200;
 /** How long the active team has to submit all actions, in ms. */
 const ROUND_DECISION_TIMEOUT_MS = 30_000;
 /** How long a single story-phase player has to pick a choice, in ms. */
-const STORY_DECISION_TIMEOUT_MS = 50_000;
-
-/* At the top of game.gateway.ts, extend the interface: */
+const STORY_DECISION_TIMEOUT_MS = 70_000;
 
 interface EnemyConfig {
   hp: number;
@@ -50,8 +48,6 @@ interface EnemyConfig {
   phases?: CpuPhase[];
   abilities?: CpuAbilityId[];
 }
-
-/* Replace ENEMY_CONFIGS with this: */
 
 const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
   'ECHO BEAST': {
@@ -115,7 +111,7 @@ const ENEMY_CONFIGS: Record<string, EnemyConfig> = {
     telegraphs: true,
     abilities: ['rend', 'sweep', 'mend', 'drain'],
   },
-  'RAVENS vs DRAGONS': {
+  'COLD DRAKE': {
     hp: 3800,
     attack: 110,
     personality: 'strategic',
@@ -313,7 +309,11 @@ export class GameGateway {
         this.approveRoom(client, event);
         break;
       case 'ADMIN_GET_ROOMS':
+        // Admin requests the room list — mark as watcher so future
+        // broadcasts reach them, and send the current snapshot.
+        client.watcher = true;
         this.sendRoomList(client.socket);
+        this.sendPlayerList(client.socket);
         break;
       case 'STORY_UPDATE':
         if (!client.roomCode) {
@@ -336,9 +336,118 @@ export class GameGateway {
       case 'CREDITS_DONE':
         this.handleCreditsDone(client);
         break;
+      case 'ADMIN_KICK_PLAYER':
+        this.adminKickPlayer(client, event.playerId);
+        break;
       default:
         this.sendError(client.socket, 'Unknown game event.');
     }
+  }
+
+  /* ================================================================== */
+  /* Admin — player list + kick                                          */
+  /* ================================================================== */
+
+  private sendPlayerList(socket: Socket) {
+    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    const players: AdminPlayerSummary[] = [];
+
+    if (game) {
+      for (const team of Object.values(game.teams)) {
+        for (const p of team.players) {
+          players.push({
+            id: p.id,
+            name: p.name,
+            teamId: p.teamId,
+            hp: p.hp,
+            maxHp: p.maxHp,
+            status: p.status,
+            connected: p.connected,
+            ready: p.ready,
+          });
+        }
+      }
+    }
+
+    socket.emit(
+      'message',
+      JSON.stringify({
+        type: 'PLAYER_LIST_UPDATE',
+        players,
+      } satisfies GameEvent),
+    );
+  }
+
+  private broadcastPlayerList() {
+    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    const players: AdminPlayerSummary[] = [];
+
+    if (game) {
+      for (const team of Object.values(game.teams)) {
+        for (const p of team.players) {
+          players.push({
+            id: p.id,
+            name: p.name,
+            teamId: p.teamId,
+            hp: p.hp,
+            maxHp: p.maxHp,
+            status: p.status,
+            connected: p.connected,
+            ready: p.ready,
+          });
+        }
+      }
+    }
+
+    const event = {
+      type: 'PLAYER_LIST_UPDATE' as const,
+      players,
+    };
+
+    for (const client of this.clients) {
+      if (client.watcher) {
+        client.socket.emit('message', JSON.stringify(event));
+      }
+    }
+  }
+
+  private adminKickPlayer(client: ConnectedClient, playerId: string) {
+    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    if (!game) {
+      this.sendError(client.socket, 'Game not found.');
+      return;
+    }
+
+    const player = this.findPlayer(game, playerId);
+    if (!player) {
+      this.sendError(client.socket, 'Player not found.');
+      return;
+    }
+
+    const team = game.teams[player.teamId];
+    const idx = team.players.findIndex((p) => p.id === playerId);
+    if (idx >= 0) {
+      team.players.splice(idx, 1);
+    }
+
+    this.clampRotations(game);
+
+    if (game.activePlayerId === playerId) {
+      this.advanceActivePlayer(game);
+    }
+
+    this.broadcastEvent(GLOBAL_ROOM, {
+      type: 'ELIMINATE',
+      playerId,
+    });
+
+    this.broadcastState();
+    this.broadcastRoomList();
+    this.broadcastPlayerList();
+
+    this.logger.log(
+      `Admin kicked player ${player.name} (${playerId}) from ${player.teamId}`,
+    );
   }
 
   /* ================================================================== */
@@ -467,6 +576,7 @@ export class GameGateway {
       this.broadcastState();
       this.broadcastRoomList();
     }
+    this.broadcastPlayerList();
   }
 
   private leaveGame(
@@ -490,11 +600,11 @@ export class GameGateway {
     }
     client.playerId = undefined;
 
-    // Keep rotation indices in range after a removal.
     this.clampRotations(game);
 
     this.broadcastState();
     this.broadcastRoomList();
+    this.broadcastPlayerList();
   }
 
   private joinGame(
@@ -509,30 +619,21 @@ export class GameGateway {
       return;
     }
 
-    // ------------------------------------------------------------------
-    // 1. Normalize the name
-    // ------------------------------------------------------------------
     const requestedName = (event.playerName ?? '').trim();
     const fallbackName = event.playerId.slice(0, 6).toUpperCase();
     const desiredName = requestedName.length > 0 ? requestedName : fallbackName;
 
-    // ------------------------------------------------------------------
-    // 2. Detect an existing player by id (reconnection case)
-    // ------------------------------------------------------------------
     const existingPlayer = team.players.find(
       (player) => player.id === event.playerId,
     );
 
-    // ------------------------------------------------------------------
-    // 3. Reject duplicate names — but only if it's a NEW player
-    // ------------------------------------------------------------------
     if (!existingPlayer) {
       const nameTaken = Object.values(game.teams)
         .flatMap((t) => t.players)
         .some(
           (p) =>
             p.name.toLowerCase() === desiredName.toLowerCase() &&
-            p.id !== event.playerId, // ignore self (in case of reconnect)
+            p.id !== event.playerId,
         );
 
       if (nameTaken) {
@@ -544,16 +645,11 @@ export class GameGateway {
       }
     }
 
-    // ------------------------------------------------------------------
-    // 4. Enforce team caps — only when the room has caps set
-    // ------------------------------------------------------------------
     const cap = game.teamCaps?.[event.teamId];
 
     if (cap !== undefined) {
-      // Count only connected players — disconnected ones don't occupy slots.
       const connectedCount = team.players.filter((p) => p.connected).length;
 
-      // If the player already exists, they don't count as a new slot.
       if (!existingPlayer && connectedCount >= cap) {
         this.sendError(
           client.socket,
@@ -561,20 +657,13 @@ export class GameGateway {
         );
         return;
       }
-
-      // If the team already has 2 players but the new one is a reconnect,
-      // allow it (they're reclaiming their own slot).
     }
 
-    // ------------------------------------------------------------------
-    // 5. Reject duplicate sockets — same player joining twice
-    // ------------------------------------------------------------------
     if (
       client.playerId &&
       client.playerId !== event.playerId &&
       client.roomCode === GLOBAL_ROOM
     ) {
-      // The client is switching identity. Remove the old one.
       for (const t of Object.values(game.teams)) {
         const idx = t.players.findIndex((p) => p.id === client.playerId);
         if (idx >= 0) {
@@ -585,9 +674,6 @@ export class GameGateway {
       this.clampRotations(game);
     }
 
-    // ------------------------------------------------------------------
-    // 6. Create or reconnect the player
-    // ------------------------------------------------------------------
     if (!existingPlayer) {
       team.players.push({
         id: event.playerId,
@@ -603,13 +689,9 @@ export class GameGateway {
       });
     } else {
       existingPlayer.connected = true;
-      // Keep the name in sync in case they changed it.
       existingPlayer.name = desiredName;
     }
 
-    // ------------------------------------------------------------------
-    // 7. Join the socket room
-    // ------------------------------------------------------------------
     if (client.roomCode && client.roomCode !== GLOBAL_ROOM) {
       void client.socket.leave(client.roomCode);
     }
@@ -624,6 +706,7 @@ export class GameGateway {
     this.broadcastStory();
     this.broadcastState();
     this.broadcastRoomList();
+    this.broadcastPlayerList();
   }
 
   private watchGame(
@@ -649,6 +732,7 @@ export class GameGateway {
     this.broadcastStory();
     this.sendState(client.socket, game);
     this.sendRoomList(client.socket);
+    this.sendPlayerList(client.socket);
   }
 
   private playerReady(client: ConnectedClient, playerId: string) {
@@ -664,7 +748,7 @@ export class GameGateway {
   }
 
   /* ================================================================== */
-  /* Admin                                                               */
+  /* Admin — approval                                                    */
   /* ================================================================== */
 
   private approveRoom(
@@ -703,7 +787,6 @@ export class GameGateway {
     game.currentTeamId = populated[0];
     game.phase = 'story';
 
-    // Reset rotation for every participating team.
     game.playerRotation = {};
     for (const teamId of populated) {
       game.playerRotation[teamId] = 0;
@@ -728,6 +811,7 @@ export class GameGateway {
     this.broadcastStory();
     this.broadcastState();
     this.broadcastRoomList();
+    this.broadcastPlayerList();
   }
 
   private changeTeamTurn(client: ConnectedClient, teamId: TeamId) {
@@ -746,7 +830,6 @@ export class GameGateway {
         !(p.statusEffects ?? []).some((s) => s.id === 'immobilized'),
     );
 
-    // Resume this team's rotation from where it left off.
     game.playerRotation = game.playerRotation ?? {};
     const startIdx = game.playerRotation[teamId] ?? 0;
     const safeIdx = alive.length ? startIdx % alive.length : 0;
@@ -786,22 +869,13 @@ export class GameGateway {
     this.broadcastEvent(GLOBAL_ROOM, { type: 'ELIMINATE', playerId });
     this.broadcastState();
     this.broadcastRoomList();
+    this.broadcastPlayerList();
   }
 
   /* ================================================================== */
   /* Turn rotation                                                       */
   /* ================================================================== */
 
-  /**
-   * Advances to the next player on the CURRENT team, stores the new
-   * index in `game.playerRotation`, then hands off to the next team.
-   *
-   * Resulting order (example with 3-player Ravens, 2-player Wolves):
-   *   ravens.p1 → wolves.p1 → dragons.p1 → serpents.p1
-   *   ravens.p2 → wolves.p2 → dragons.p2 → serpents.p2
-   *   ravens.p3 → wolves.p1 → dragons.p3 → serpents.p3
-   *   ravens.p1 → ...
-   */
   private advanceActivePlayer(
     game: NonNullable<ReturnType<GameStore['getGame']>>,
   ) {
@@ -835,8 +909,6 @@ export class GameGateway {
 
     this.startStoryTimeout(game);
 
-    // Hand off to the next team. Their rotation resumes from where it
-    // left off when we come back to them.
     this.advanceTeam(game);
   }
 
@@ -885,23 +957,13 @@ export class GameGateway {
     game.phase = 'ended';
     this.clearRoundTimeout();
     this.clearStoryTimeout();
-    // this.broadcastEvent(GLOBAL_ROOM, {
-    //   type: 'GAME_OVER',
-    //   message: 'The mountain keeps its memory.',
-    //   restartInMs: 15_000,
-    // });
 
-    // Give players 15 seconds to see the banner, then restart.
     setTimeout(() => {
       void this.restartGame();
     }, 15_000);
     this.broadcastState();
   }
 
-  /**
-   * Clamps every team's rotation index to the current alive count so
-   * a shrinking roster can never point at a dead player.
-   */
   private clampRotations(game: NonNullable<ReturnType<GameStore['getGame']>>) {
     game.playerRotation = game.playerRotation ?? {};
     for (const teamId of Object.keys(game.teams) as TeamId[]) {
@@ -1012,10 +1074,6 @@ export class GameGateway {
     this.broadcastRoomList();
   }
 
-  /* ------------------------------------------------------------------ */
-  /* Battle init from a story choice                                     */
-  /* ------------------------------------------------------------------ */
-
   private startBattleFromChoice(
     game: NonNullable<ReturnType<GameStore['getGame']>>,
     choice: StoryChoice,
@@ -1086,8 +1144,8 @@ export class GameGateway {
             signatureEveryNRounds: config.signatureEveryNRounds,
             signatureMultiplier: config.signatureMultiplier,
             telegraphs: config.telegraphs,
-            phases: choice.enemyPhases ?? config.phases, // ← prefer choice
-            abilities: choice.enemyAbilities ?? config.abilities, // ← prefer choice
+            phases: choice.enemyPhases ?? config.phases,
+            abilities: choice.enemyAbilities ?? config.abilities,
           },
         );
       } else {
@@ -1181,10 +1239,6 @@ export class GameGateway {
     this.broadcastState();
     this.broadcastRoomList();
   }
-
-  /* ------------------------------------------------------------------ */
-  /* Random encounter                                                    */
-  /* ------------------------------------------------------------------ */
 
   private handleRandomEncounter(
     game: NonNullable<ReturnType<GameStore['getGame']>>,
@@ -1695,8 +1749,6 @@ export class GameGateway {
       game.pendingNextNodeId = undefined;
     }
 
-    // Recompute rotation indices against the new alive counts after
-    // any deaths that happened during the fight.
     this.clampRotations(game);
 
     this.advanceActivePlayer(game);
@@ -1855,6 +1907,9 @@ export class GameGateway {
         client.socket.emit('message', JSON.stringify(event));
       }
     }
+
+    // Also push the roster to admin viewers.
+    this.broadcastPlayerList();
   }
 
   private handleCreditsDone(client: ConnectedClient) {
@@ -1866,7 +1921,6 @@ export class GameGateway {
     game.creditsStartedAt = undefined;
     game.creditsDurationMs = undefined;
 
-    // Reset rotation state for a fresh game.
     game.playerRotation = {};
     game.lastActivePlayerId = undefined;
 
@@ -1879,7 +1933,6 @@ export class GameGateway {
 
     this.logger.log('Restarting the Highlands');
 
-    // Reset every team.
     for (const teamId of Object.keys(game.teams) as TeamId[]) {
       const team = game.teams[teamId];
       for (const player of team.players) {
@@ -1893,11 +1946,9 @@ export class GameGateway {
       }
     }
 
-    // Reset rotation state.
     game.playerRotation = {};
     game.lastActivePlayerId = undefined;
 
-    // Reset the story and battle.
     game.phase = 'waiting';
     game.currentNodeId = 'start';
     game.currentTeamId = 'ravens';
@@ -1908,21 +1959,13 @@ export class GameGateway {
     game.creditsStartedAt = undefined;
     game.creditsDurationMs = undefined;
 
-    // Clear per-room caches.
     this.seenCutscenes.clear();
     this.lastCutsceneNodeId = null;
     this.activeCutsceneId = null;
-    // this.resolvedRound = false;
-    // this.lastRoundTimerBroadcast = 0;
-
-    // // Tell clients to reset their view.
-    // this.broadcastEvent(GLOBAL_ROOM, {
-    //   type: 'RESTART',
-    //   roomCode: game.roomCode,
-    // });
 
     this.broadcastStory();
     this.broadcastState();
     this.broadcastRoomList();
+    this.broadcastPlayerList();
   }
 }

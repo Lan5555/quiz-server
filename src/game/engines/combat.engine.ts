@@ -4,7 +4,6 @@ import {
   Battle,
   CombatAction,
   CombatVariant,
-  CpuAbilityId,
   CpuBattle,
   CpuPersonality,
   CpuPhase,
@@ -29,11 +28,10 @@ const SKILL_DAMAGE: Record<SkillId, [number, number]> = {
 };
 
 const HEAL_AMOUNT: Record<HealId, number> = {
-  minor_heal: 340,
+  minor_heal: 240,
   major_heal: 520,
 };
 
-/** Break meter — harder to trigger, capped gain per hit. */
 const BREAK_THRESHOLD = 200;
 const BREAK_PER_DAMAGE = 1.2;
 const BREAK_GAIN_CAP = 40;
@@ -41,33 +39,40 @@ const BREAK_DECAY_PER_ACTION = 20;
 const BREAK_MIN_DAMAGE = 50;
 const BREAK_DURATION_TURNS = 2;
 
-/** Per-battle uses of each ability type, per player. */
 const MAX_SKILL_USES = 6;
 const MAX_HEAL_USES = 6;
 
-/** Enemy attack ramp — +3% per round, capped at +50%. */
 const ENEMY_ROUND_RAMP = 0.03;
-const ENEMY_ROUND_RAMP_CAP = 1.2;
+const ENEMY_ROUND_RAMP_CAP = 1.5;
 
-/** Enemy team-size pressure — +20% per extra player, capped at +60%. */
 const ENEMY_PRESSURE_PER_PLAYER = 0.2;
-const ENEMY_PRESSURE_CAP = 1.25;
+const ENEMY_PRESSURE_CAP = 1.6;
 
-/** Enrage — triggers at 50% HP, hits 50% harder. */
 const ENRAGE_THRESHOLD = 0.5;
-const ENRAGE_MULT = 1.25;
+const ENRAGE_MULT = 1.5;
 
-/** Howl is additive so it can't snowball in long fights. Future */
 const HOWL_GAIN_NORMAL = 20;
 const HOWL_GAIN_ENRAGED = 35;
 
-/** Enemy self-heal tuning. */
-const MEND_RATIO = 0.08; // heals 8% max HP
-const MEND_RATIO_ENRAGED = 0.12; // 12% when enraged
-const DRAIN_RATIO = 0.5; // drains 50% of damage dealt as HP
+const MEND_RATIO = 0.08;
+const MEND_RATIO_ENRAGED = 0.12;
+const DRAIN_RATIO = 0.5;
 
-/** Player damage — scaled to 1000 HP pool. */
-const PLAYER_ATTACK = [90, 120] as const;
+const PLAYER_ATTACK = [140, 200] as const;
+
+/** Guard reduces incoming damage by this fraction. */
+const GUARD_DAMAGE_REDUCTION = 0.5;
+
+/** Dodge has this chance to fully avoid an incoming hit. */
+const DODGE_EVADE_CHANCE = 0.5;
+
+export type CpuAbilityId =
+  | 'rend'
+  | 'howl'
+  | 'sweep'
+  | 'crush'
+  | 'mend'
+  | 'drain';
 
 function isSkillId(value: CombatVariant | undefined): value is SkillId {
   return (
@@ -87,7 +92,6 @@ function roll(min: number, max: number) {
 }
 
 export class CombatEngine {
-  /** Set to true when the current action caused a fresh break. */
   private brokeThisAction = false;
 
   /* ------------------------------------------------------------------ */
@@ -221,6 +225,61 @@ export class CombatEngine {
         p.healCharges = MAX_HEAL_USES;
       }
     }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Incoming damage resolver — reads guard and dodge                    */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Applies incoming damage to a target, factoring in `guarded` and
+   * `evading` status effects. Consumes the effect when it fires.
+   *
+   * - Dodge: 50% chance to fully avoid, consumes `evading` either way.
+   * - Guard: 50% damage reduction, consumes `guarded`.
+   *
+   * Returns the actual damage dealt and whether the hit was dodged or
+   * guarded so callers can log appropriately.
+   */
+  private applyIncomingDamage(
+    target: Player,
+    rawDamage: number,
+  ): { dealt: number; dodged: boolean; guarded: boolean } {
+    if (target.status !== 'alive') {
+      return { dealt: 0, dodged: false, guarded: false };
+    }
+
+    const effects = target.statusEffects ?? [];
+
+    // ---- Dodge -------------------------------------------------------
+    const hasEvade = effects.some((s) => s.id === 'evading');
+    if (hasEvade) {
+      // Consume the effect whether or not the dodge succeeds.
+      target.statusEffects = effects.filter((s) => s.id !== 'evading');
+
+      const dodged = Math.random() < DODGE_EVADE_CHANCE;
+      if (dodged) {
+        return { dealt: 0, dodged: true, guarded: false };
+      }
+    }
+
+    // ---- Guard -------------------------------------------------------
+    const remaining = target.statusEffects ?? [];
+    const hasGuard = remaining.some((s) => s.id === 'guarded');
+
+    let damage = rawDamage;
+    if (hasGuard) {
+      damage = Math.round(damage * (1 - GUARD_DAMAGE_REDUCTION));
+      target.statusEffects = remaining.filter((s) => s.id !== 'guarded');
+    }
+
+    target.hp = Math.max(0, target.hp - damage);
+
+    if (target.hp === 0) {
+      target.status = 'eliminated';
+    }
+
+    return { dealt: damage, dodged: false, guarded: hasGuard };
   }
 
   /* ------------------------------------------------------------------ */
@@ -392,7 +451,7 @@ export class CombatEngine {
   }
 
   /* ------------------------------------------------------------------ */
-  /* PvP attacks                                                         */
+  /* PvP attacks (targeted)                                              */
   /* ------------------------------------------------------------------ */
 
   private pvpAttack(
@@ -406,15 +465,23 @@ export class CombatEngine {
       ? opponents.find((p) => p.id === targetId)
       : undefined;
     const target = requested ?? opponents[roll(0, opponents.length - 1)];
-    const damage = roll(PLAYER_ATTACK[0], PLAYER_ATTACK[1]);
+    const rawDamage = roll(PLAYER_ATTACK[0], PLAYER_ATTACK[1]);
 
-    target.hp = Math.max(0, target.hp - damage);
+    const { dealt, dodged, guarded } = this.applyIncomingDamage(
+      target,
+      rawDamage,
+    );
 
-    const broke = this.applyBreakMeter(target, damage);
+    if (dodged) {
+      return `${target.name} dodged ${player.name}'s strike.`;
+    }
+
+    const broke = this.applyBreakMeter(target, dealt);
 
     if (target.hp === 0) {
-      target.status = 'eliminated';
-      return `${player.name} struck ${target.name} for ${damage} damage — ${target.name} is down!`;
+      return guarded
+        ? `${player.name} struck ${target.name}, but their guard held — ${dealt} damage. ${target.name} still falls.`
+        : `${player.name} struck ${target.name} for ${dealt} damage — ${target.name} is down!`;
     }
 
     if (broke) {
@@ -422,7 +489,9 @@ export class CombatEngine {
       battle.log.push(`${target.name} loses their next turn.`);
     }
 
-    return `${player.name} struck ${target.name} for ${damage} damage.`;
+    return guarded
+      ? `${player.name} struck ${target.name}, but their guard absorbed part of it — ${dealt} damage.`
+      : `${player.name} struck ${target.name} for ${dealt} damage.`;
   }
 
   private pvpSkill(
@@ -439,16 +508,25 @@ export class CombatEngine {
       ? opponents.find((p) => p.id === targetId)
       : undefined;
     const target = requested ?? opponents[roll(0, opponents.length - 1)];
-    const damage = roll(min, max);
+    const rawDamage = roll(min, max);
 
-    target.hp = Math.max(0, target.hp - damage);
+    const { dealt, dodged, guarded } = this.applyIncomingDamage(
+      target,
+      rawDamage,
+    );
 
-    const broke = this.applyBreakMeter(target, damage);
     const label = skillId.replace(/_/g, ' ');
 
+    if (dodged) {
+      return `${target.name} dodged ${player.name}'s ${label}.`;
+    }
+
+    const broke = this.applyBreakMeter(target, dealt);
+
     if (target.hp === 0) {
-      target.status = 'eliminated';
-      return `${player.name} used ${label} on ${target.name} for ${damage} damage — ${target.name} is down!`;
+      return guarded
+        ? `${player.name} used ${label} on ${target.name}, but their guard held — ${dealt} damage. ${target.name} still falls.`
+        : `${player.name} used ${label} on ${target.name} for ${dealt} damage — ${target.name} is down!`;
     }
 
     if (broke) {
@@ -456,7 +534,9 @@ export class CombatEngine {
       battle.log.push(`${target.name} loses their next turn.`);
     }
 
-    return `${player.name} used ${label} on ${target.name} for ${damage} damage.`;
+    return guarded
+      ? `${player.name} used ${label} on ${target.name}, but their guard absorbed part of it — ${dealt} damage.`
+      : `${player.name} used ${label} on ${target.name} for ${dealt} damage.`;
   }
 
   /* ------------------------------------------------------------------ */
@@ -780,25 +860,39 @@ export class CombatEngine {
     );
 
     const base = roll(
-      Math.max(1, battle.enemyAttack - 15),
-      battle.enemyAttack + 15,
+      Math.max(1, battle.enemyAttack - 40),
+      battle.enemyAttack + 40,
     );
-    const enemyDmg = Math.round(base * phaseMultiplier * roundMult);
+    const rawDamage = Math.round(base * phaseMultiplier * roundMult);
 
-    target.hp = Math.max(0, target.hp - enemyDmg);
-
-    const broke = this.applyBreakMeter(target, enemyDmg);
-
-    battle.log.push(
-      `${battle.enemyName} hits ${target.name} for ${enemyDmg} damage.`,
+    const { dealt, dodged, guarded } = this.applyIncomingDamage(
+      target,
+      rawDamage,
     );
+
+    if (dodged) {
+      battle.log.push(`${target.name} dodged ${battle.enemyName}'s attack.`);
+      return;
+    }
+
+    // Break meter only builds on hits that landed.
+    const broke = this.applyBreakMeter(target, dealt);
+
+    if (guarded) {
+      battle.log.push(
+        `${target.name} guarded against ${battle.enemyName}, taking only ${dealt} damage.`,
+      );
+    } else {
+      battle.log.push(
+        `${battle.enemyName} hits ${target.name} for ${dealt} damage.`,
+      );
+    }
 
     if (broke) {
       battle.log.push(`${target.name} is BROKEN!`);
     }
 
     if (target.hp === 0) {
-      target.status = 'eliminated';
       battle.log.push(`${target.name} has fallen.`);
     }
   }
@@ -834,32 +928,29 @@ export class CombatEngine {
     const dmgRoll = (min: number, max: number): number =>
       Math.max(1, Math.round(roll(min, max) * mult));
 
+    /**
+     * Applies a hit to a target through the guard/dodge resolver.
+     * Returns the resolved damage and crit flag.
+     */
     const hit = (
       p: Player,
       rawDmg: number,
-    ): { dealt: number; crit: boolean } => {
-      if (p.status !== 'alive') return { dealt: 0, crit: false };
-
-      const crit = Math.random() < 0.12;
-      const dmg = Math.round(rawDmg * (crit ? 1.75 : 1));
-
-      p.hp = Math.max(0, p.hp - dmg);
-
-      if (p.hp === 0) {
-        p.status = 'eliminated';
-        battle.log.push(
-          crit
-            ? `The blow is critical — ${p.name} falls.`
-            : `${p.name} has fallen.`,
-        );
+    ): { dealt: number; crit: boolean; dodged: boolean; guarded: boolean } => {
+      if (p.status !== 'alive') {
+        return { dealt: 0, crit: false, dodged: false, guarded: false };
       }
 
-      return { dealt: dmg, crit };
-    };
+      const crit = Math.random() < 0.12;
+      const preGuard = Math.round(rawDmg * (crit ? 1.75 : 1));
 
-    /* ---------------------------------------------------------------- */
-    /* Ability definitions                                               */
-    /* ---------------------------------------------------------------- */
+      const { dealt, dodged, guarded } = this.applyIncomingDamage(p, preGuard);
+
+      if (dealt > 0) {
+        this.applyBreakMeter(p, dealt);
+      }
+
+      return { dealt, crit, dodged, guarded };
+    };
 
     const allAbilities: Array<{
       id: CpuAbilityId;
@@ -872,12 +963,26 @@ export class CombatEngine {
         name: 'Rend',
         run: () => {
           const raw = dmgRoll(88, 130);
-          const { dealt, crit } = hit(target, raw);
+          const { dealt, crit, dodged, guarded } = hit(target, raw);
+
+          if (dodged) {
+            battle.log.push(
+              `${target.name} dodged ${battle.enemyName}'s Rend.`,
+            );
+            return;
+          }
+
           battle.log.push(
-            crit
-              ? `${battle.enemyName} Rends ${target.name} — CRITICAL for ${dealt} damage.`
-              : `${battle.enemyName} uses Rend on ${target.name} for ${dealt} damage.`,
+            guarded
+              ? `${battle.enemyName} Rends ${target.name}, but their guard holds — ${dealt} damage.`
+              : crit
+                ? `${battle.enemyName} Rends ${target.name} — CRITICAL for ${dealt} damage.`
+                : `${battle.enemyName} uses Rend on ${target.name} for ${dealt} damage.`,
           );
+
+          if (target.hp === 0) {
+            battle.log.push(`${target.name} has fallen.`);
+          }
         },
       },
       {
@@ -901,18 +1006,26 @@ export class CombatEngine {
 
           let anyCrit = false;
           let totalDealt = 0;
+          let anyDodged = false;
+          let anyGuarded = false;
 
           for (const p of aliveTeam) {
             const raw = dmgRoll(32, 56);
-            const { dealt, crit } = hit(p, raw);
+            const { dealt, crit, dodged, guarded } = hit(p, raw);
             if (crit) anyCrit = true;
+            if (dodged) anyDodged = true;
+            if (guarded) anyGuarded = true;
             totalDealt += dealt;
           }
 
           battle.log.push(
-            anyCrit
-              ? `${battle.enemyName} Sweeps the team. A critical cut lands.`
-              : `${battle.enemyName} sweeps across the whole team for ${totalDealt} total damage.`,
+            anyDodged
+              ? `${battle.enemyName} Sweeps the team — some strikes are dodged.`
+              : anyGuarded
+                ? `${battle.enemyName} Sweeps the team — guards absorb the brunt for ${totalDealt} total damage.`
+                : anyCrit
+                  ? `${battle.enemyName} Sweeps the team. A critical cut lands.`
+                  : `${battle.enemyName} sweeps across the whole team for ${totalDealt} total damage.`,
           );
         },
       },
@@ -923,14 +1036,18 @@ export class CombatEngine {
         run: () => {
           const raw = dmgRoll(64, 96);
           let totalDealt = 0;
+          let anyDodged = false;
 
           for (const p of aliveTeam) {
-            const { dealt } = hit(p, raw);
+            const { dealt, dodged } = hit(p, raw);
+            if (dodged) anyDodged = true;
             totalDealt += dealt;
           }
 
           battle.log.push(
-            `${battle.enemyName} brings down Ruin. The team is crushed for ${totalDealt} total damage.`,
+            anyDodged
+              ? `${battle.enemyName} brings down Ruin — some slip the blow. ${totalDealt} total damage.`
+              : `${battle.enemyName} brings down Ruin. The team is crushed for ${totalDealt} total damage.`,
           );
         },
       },
@@ -960,7 +1077,14 @@ export class CombatEngine {
         name: 'Drain',
         run: () => {
           const raw = dmgRoll(60, 100);
-          const { dealt, crit } = hit(target, raw);
+          const { dealt, crit, dodged } = hit(target, raw);
+
+          if (dodged) {
+            battle.log.push(
+              `${target.name} dodged ${battle.enemyName}'s Drain.`,
+            );
+            return;
+          }
 
           const drainAmount = Math.round(dealt * DRAIN_RATIO);
           const before = battle.enemyHp;
@@ -975,13 +1099,13 @@ export class CombatEngine {
               ? `${battle.enemyName} Drains ${target.name} — CRITICAL for ${dealt} damage, recovering ${healed} HP.`
               : `${battle.enemyName} Drains ${target.name} for ${dealt} damage and recovers ${healed} HP.`,
           );
+
+          if (target.hp === 0) {
+            battle.log.push(`${target.name} has fallen.`);
+          }
         },
       },
     ];
-
-    /* ---------------------------------------------------------------- */
-    /* Which abilities are allowed for this enemy?                       */
-    /* ---------------------------------------------------------------- */
 
     const allowed = battle.abilities ?? null;
 
@@ -993,25 +1117,15 @@ export class CombatEngine {
     );
 
     if (pool.length === 0) {
-      // Fallback: nothing allowed this round — basic attack.
       this.cpuBasicAttack(game, battle, target, phaseMultiplier);
       return;
     }
-
-    /* ---------------------------------------------------------------- */
-    /* Weighted pick                                                     */
-    /* ---------------------------------------------------------------- */
 
     const pick = this.pickAbility(pool, enraged, personality);
     pick.run();
   }
 
-  /**
-   * Weighted pick from the allowed ability pool. Enraged bosses favor
-   * Crush + Rend + Drain, regular bosses favor Rend + Sweep with the
-   * occasional Mend, and everyone else leans on Rend + Sweep.
-   */
-  private pickAbility<T extends { id: CpuAbilityId }>(
+  private pickAbility<T extends { id: CpuAbilityId; name: string }>(
     pool: T[],
     enraged: boolean,
     personality: CpuPersonality,
@@ -1080,20 +1194,31 @@ export class CombatEngine {
     phaseMultiplier: number,
   ) {
     const multiplier = battle.signatureMultiplier ?? 1.6;
-    const dmg = Math.round(roll(112, 160) * phaseMultiplier * multiplier);
+    const rawDamage = Math.round(roll(112, 160) * phaseMultiplier * multiplier);
 
-    target.hp = Math.max(0, target.hp - dmg);
+    const { dealt, dodged, guarded } = this.applyIncomingDamage(
+      target,
+      rawDamage,
+    );
 
-    const broke = this.applyBreakMeter(target, dmg);
+    if (dodged) {
+      battle.log.push(
+        `${target.name} dodged ${battle.enemyName}'s signature move.`,
+      );
+      return;
+    }
+
+    const broke = this.applyBreakMeter(target, dealt);
 
     battle.log.push(
-      `${battle.enemyName} unleashes a devastating signature move on ${target.name} for ${dmg} damage!`,
+      guarded
+        ? `${battle.enemyName} unleashes a devastating signature move on ${target.name}, but their guard absorbs it — only ${dealt} damage gets through.`
+        : `${battle.enemyName} unleashes a devastating signature move on ${target.name} for ${dealt} damage!`,
     );
 
     if (broke) battle.log.push(`${target.name} is BROKEN!`);
 
     if (target.hp === 0) {
-      target.status = 'eliminated';
       battle.log.push(`${target.name} has fallen.`);
     }
   }
