@@ -1369,6 +1369,16 @@ export class GameGateway {
           signatureMultiplier: 2.0,
           weight: 15,
         },
+        {
+          name: 'SMALL MICHEAL',
+          hp: 2500,
+          attack: 270,
+          personality: 'aggressive' as const,
+          abilityChance: 0.4,
+          signatureEveryNRounds: 3,
+          signatureMultiplier: 2.0,
+          weight: 15,
+        },
       ],
     };
 
