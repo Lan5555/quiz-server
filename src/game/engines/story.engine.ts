@@ -149,7 +149,7 @@ export class StoryEngine {
       title: 'THE GATE',
       text:
         'A colossal gate stands between the teams and the mountain. ' +
-        'Names are carved into the stone — some of them belong to the people ' +
+        'Names are carved into the stone some of them belong to the people ' +
         'standing beside you, others to people none of you have ever met. ' +
         'But all of them are warm to the touch. ' +
         'As the teams approach, the gate notices them. ' +
@@ -367,7 +367,7 @@ export class StoryEngine {
       text:
         'The whispers soften. For one brief moment, the Highlands feels almost kind. ' +
         'The team catches its breath. ' +
-        'Someone laughs — quietly, involuntarily — and no one is sure who. ' +
+        'Someone laughs quietly, involuntarily and no one is sure who. ' +
         'It is the first sound any of them has made that was not afraid.',
       background: '/images/cathedral.jpg',
 
@@ -403,7 +403,7 @@ export class StoryEngine {
       text:
         'The mountain ends abruptly at a massive cliff. ' +
         'There is no bottom. Only darkness. ' +
-        'And yet — faintly — from very far below, someone is humming a lullaby. ' +
+        'And yet faintly from very far below, someone is humming a lullaby. ' +
         'It is the same lullaby the music box in the chapel was playing. ' +
         'It is being hummed by a voice that is trying very hard not to cry.',
       background: '/images/cliff.jpg',
@@ -558,7 +558,7 @@ export class StoryEngine {
       text:
         'The forest opens into a long corridor of glass. ' +
         'Every panel is a mirror, and every mirror shows a different version ' +
-        'of the same room — a kitchen, a nursery, a hospital bed, a doorway, ' +
+        'of the same room a kitchen, a nursery, a hospital bed, a doorway, ' +
         'four candles, a hand held one last time. ' +
         'None of the reflections look at the team. ' +
         'They are all looking at someone the team cannot see. ' +
@@ -810,7 +810,7 @@ export class StoryEngine {
         'Some of them are impossibly old. ' +
         'In one, a man stands beside a woman who has your face. ' +
         'They are laughing. You have never heard that sound before. ' +
-        'But somehow, you know exactly what it sounds like — ' +
+        'But somehow, you know exactly what it sounds like ' +
         'the way you know the shape of your own hands in the dark.',
       background: '/images/old_house.jpg',
 
@@ -868,7 +868,7 @@ export class StoryEngine {
         'Some names you recognise. Most you do not. ' +
         'The final entry is dated tomorrow. It has only one line: ' +
         '"I hope they forgive me." ' +
-        'The ink at the end of the line has been blown on — the page is slightly warped, ' +
+        'The ink at the end of the line has been blown on the page is slightly warped, ' +
         'the way paper warps when someone has been crying on it.',
       background: '/images/journal.jpg',
 
@@ -1022,7 +1022,7 @@ export class StoryEngine {
         'When they remove their masks, they have your face. All of them. ' +
         'They are the versions of you who learned to stop feeling. ' +
         'They do not fight like animals. They fight like people who have been ' +
-        'waiting for this exact fight for years — carefully, methodically, ' +
+        'waiting for this exact fight for years carefully, methodically, ' +
         'with the terrible calm of the truly lost.',
       background: '/images/hunters.jpg',
 
@@ -1247,7 +1247,7 @@ export class StoryEngine {
       text:
         'The four teams finally stand together. ' +
         'Ravens. Serpents. Dragons. Wolves. ' +
-        'For the first time, everyone understands that the Highlands was built for them — ' +
+        'For the first time, everyone understands that the Highlands was built for them ' +
         'and that they are not the first four houses to stand here. ' +
         'They are only the most recent. ' +
         'Beneath their feet, the stone is worn into a shallow groove, ' +
@@ -1389,7 +1389,7 @@ export class StoryEngine {
         'The battlefield falls silent. ' +
         'The survivors stare at one another. ' +
         'Then someone begins to laugh. Not because it is funny. ' +
-        'Because they have just realised that this is exactly what he wanted — ' +
+        'Because they have just realised that this is exactly what he wanted ' +
         'and that they have been doing it, again and again, for two hundred years, ' +
         'and that the ground beneath them has never once been clean.',
       background: '/images/courtyard.jpg',
@@ -1507,7 +1507,7 @@ export class StoryEngine {
       text:
         'The surviving members finally understand the truth. ' +
         'The teams were never meant to escape separately. ' +
-        'They were meant to destroy one another — ' +
+        'They were meant to destroy one another ' +
         'because that is what he has been training them for, ' +
         'one night at a time, for two hundred years. ' +
         'When they look at each other now, they do not see enemies. ' +
@@ -2261,7 +2261,7 @@ export class StoryEngine {
       text:
         'The room grows warm. ' +
         'Nicholas stands at the centre of it. ' +
-        'The small lights around him begin to whisper all at once — ' +
+        'The small lights around him begin to whisper all at once ' +
         'not angry, not afraid, only sad. ' +
         'They are the sounds of every night he has spent trying to fix this. ' +
         'When he raises his hand, the air around him shimmers. ' +
@@ -2709,7 +2709,7 @@ export class StoryEngine {
         'You choose not to destroy the small lights. ' +
         'Instead, you sit beside him, and you let him finally put them down. ' +
         'One at a time. Gently. ' +
-        'The candle on the table — the one that never went out — ' +
+        'The candle on the table the one that never went out ' +
         'you blow it out together, at the very end. ' +
         'For the first time, the Highlands becomes silent.',
       background: '/images/sanctum.jpg',
