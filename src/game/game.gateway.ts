@@ -28,14 +28,14 @@ interface ConnectedClient {
 const GLOBAL_ROOM = 'global';
 const ALL_TEAMS: TeamId[] = ['ravens', 'wolves', 'dragons', 'serpents'];
 
-/** Delay between resolved queued actions, in ms. */
 const ACTION_RESOLVE_DELAY_MS = 900;
-/** Delay before the CPU retaliates at the end of a round, in ms. */
 const ENEMY_RETALIATE_DELAY_MS = 1200;
-/** How long the active team has to submit all actions, in ms. */
 const ROUND_DECISION_TIMEOUT_MS = 30_000;
-/** How long a single story-phase player has to pick a choice, in ms. */
 const STORY_DECISION_TIMEOUT_MS = 70_000;
+
+const DEFAULT_TEAM_CAP = 4;
+const MIN_TEAM_CAP = 1;
+const MAX_TEAM_CAP = 10;
 
 interface EnemyConfig {
   hp: number;
@@ -287,6 +287,9 @@ export class GameGateway {
       case 'START_PVP':
         this.startPvpMatch(client, event);
         break;
+      case 'SET_TEAM_CAP':
+        this.setTeamCap(client, event);
+        break;
       case 'WATCH_GAME':
         this.watchGame(client, event);
         break;
@@ -392,7 +395,6 @@ export class GameGateway {
     game.lastActivePlayerId = event.playerId;
 
     if (event.battleMode === 'cpu') {
-      // Vs Enemies: fight starts immediately.
       const enemyName = event.enemyName ?? this.pickRandomOpeningEnemy();
       const config = ENEMY_CONFIGS[enemyName];
 
@@ -401,17 +403,17 @@ export class GameGateway {
         game,
         event.teamId,
         enemyName,
-        config.hp,
-        config.hp,
+        config?.hp ?? 1200,
+        config?.hp ?? 1200,
         {
-          attack: config.attack,
-          personality: config.personality,
-          abilityChance: config.abilityChance,
-          signatureEveryNRounds: config.signatureEveryNRounds,
-          signatureMultiplier: config.signatureMultiplier,
-          telegraphs: config.telegraphs,
-          phases: config.phases,
-          abilities: config.abilities,
+          attack: config?.attack ?? 100,
+          personality: config?.personality ?? 'aggressive',
+          abilityChance: config?.abilityChance ?? 0.35,
+          signatureEveryNRounds: config?.signatureEveryNRounds ?? 4,
+          signatureMultiplier: config?.signatureMultiplier ?? 1.6,
+          telegraphs: config?.telegraphs,
+          phases: config?.phases,
+          abilities: config?.abilities,
         },
       );
 
@@ -424,8 +426,9 @@ export class GameGateway {
       this.broadcastRoundState(game);
       this.startRoundTimeout(game);
     } else {
-      // PvP: wait for other players to join.
+      // PvP: wait for the host to click Start.
       game.phase = 'waiting';
+      game.teamCap = DEFAULT_TEAM_CAP;
     }
 
     this.send(client.socket, {
@@ -460,6 +463,10 @@ export class GameGateway {
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
+  /**
+   * Host-only. Starts the PvP match if at least two teams are populated.
+   * No CPU fallback — a lone host waits.
+   */
   private startPvpMatch(
     client: ConnectedClient,
     event: Extract<GameEvent, { type: 'START_PVP' }>,
@@ -468,42 +475,25 @@ export class GameGateway {
     if (!roomCode) return;
     const game = this.gameStore.getGame(roomCode);
     if (!game || game.battleMode !== 'pvp') return;
-    if (game.phase !== 'waiting') return;
+    if (game.phase !== 'waiting') {
+      this.sendError(client.socket, 'The match has already started.');
+      return;
+    }
+
+    if (game.hostPlayerId && client.playerId !== game.hostPlayerId) {
+      this.sendError(client.socket, 'Only the host can start the match.');
+      return;
+    }
 
     const populated = ALL_TEAMS.filter(
       (id) => game.teams[id].players.length > 0,
     );
 
     if (populated.length < 2) {
-      // Not enough players — send an enemy instead.
-      const enemyName = this.pickRandomOpeningEnemy();
-      const config = ENEMY_CONFIGS[enemyName];
-      game.phase = 'battle';
-      game.battle = this.combatEngine.createCpuBattle(
-        game,
-        game.currentTeamId,
-        enemyName,
-        config.hp,
-        config.hp,
-        {
-          attack: config.attack,
-          personality: config.personality,
-          abilityChance: config.abilityChance,
-          signatureEveryNRounds: config.signatureEveryNRounds,
-          signatureMultiplier: config.signatureMultiplier,
-          telegraphs: config.telegraphs,
-          phases: config.phases,
-          abilities: config.abilities,
-        },
+      this.sendError(
+        client.socket,
+        'At least two teams must have players before starting.',
       );
-      if (game.battle) {
-        game.battle.queuedActions = [];
-        game.battle.readyPlayerIds = [];
-        game.battle.log.push(`${enemyName} steps into the arena.`);
-      }
-      this.broadcastRoundState(game);
-      this.startRoundTimeout(game);
-      this.broadcastState(roomCode);
       return;
     }
 
@@ -525,17 +515,50 @@ export class GameGateway {
     this.broadcastState(roomCode);
   }
 
+  /**
+   * Host-only. Sets the per-team player cap for the current PvP room.
+   */
+  private setTeamCap(
+    client: ConnectedClient,
+    event: Extract<GameEvent, { type: 'SET_TEAM_CAP' }>,
+  ) {
+    const roomCode = client.roomCode;
+    if (!roomCode) return;
+    const game = this.gameStore.getGame(roomCode);
+    if (!game || game.battleMode !== 'pvp') return;
+    if (game.phase !== 'waiting') {
+      this.sendError(
+        client.socket,
+        'Team cap is locked once the match starts.',
+      );
+      return;
+    }
+
+    if (game.hostPlayerId && client.playerId !== game.hostPlayerId) {
+      this.sendError(client.socket, 'Only the host can set the team cap.');
+      return;
+    }
+
+    const cap = Math.max(
+      MIN_TEAM_CAP,
+      Math.min(MAX_TEAM_CAP, Math.floor(event.teamCap)),
+    );
+
+    game.teamCap = cap;
+    this.broadcastState(roomCode);
+  }
+
   /* ================================================================== */
   /* Admin — player list + kick                                          */
   /* ================================================================== */
 
-  private sendPlayerList(socket: Socket) {
-    const players: AdminPlayerSummary[] = [];
+  private buildPlayerList(): AdminPlayerSummary[] {
+    const byId = new Map<string, AdminPlayerSummary>();
 
     for (const game of this.gameStore.getAllGames()) {
       for (const team of Object.values(game.teams)) {
         for (const p of team.players) {
-          players.push({
+          byId.set(p.id, {
             id: p.id,
             name: p.name,
             teamId: p.teamId,
@@ -549,6 +572,11 @@ export class GameGateway {
       }
     }
 
+    return Array.from(byId.values());
+  }
+
+  private sendPlayerList(socket: Socket) {
+    const players = this.buildPlayerList();
     socket.emit(
       'message',
       JSON.stringify({
@@ -559,25 +587,7 @@ export class GameGateway {
   }
 
   private broadcastPlayerList() {
-    const players: AdminPlayerSummary[] = [];
-
-    for (const game of this.gameStore.getAllGames()) {
-      for (const team of Object.values(game.teams)) {
-        for (const p of team.players) {
-          players.push({
-            id: p.id,
-            name: p.name,
-            teamId: p.teamId,
-            hp: p.hp,
-            maxHp: p.maxHp,
-            status: p.status,
-            connected: p.connected,
-            ready: p.ready,
-          });
-        }
-      }
-    }
-
+    const players = this.buildPlayerList();
     const event = { type: 'PLAYER_LIST_UPDATE' as const, players };
 
     for (const client of this.clients) {
@@ -763,6 +773,14 @@ export class GameGateway {
       }
     }
 
+    // Reassign host if the host left.
+    if (game.hostPlayerId === event.playerId) {
+      const anyHost = Object.values(game.teams)
+        .flatMap((t) => t.players)
+        .find((p) => p.connected);
+      game.hostPlayerId = anyHost?.id;
+    }
+
     if (client.roomCode) {
       void client.socket.leave(client.roomCode);
       client.roomCode = undefined;
@@ -824,13 +842,27 @@ export class GameGateway {
       }
     }
 
-    const cap = game.teamCaps?.[event.teamId];
-    if (cap !== undefined) {
+    // Enforce the PvP team cap.
+    if (game.battleMode === 'pvp' && !existingPlayer) {
+      const cap = game.teamCap ?? DEFAULT_TEAM_CAP;
       const connectedCount = team.players.filter((p) => p.connected).length;
-      if (!existingPlayer && connectedCount >= cap) {
+      if (connectedCount >= cap) {
         this.sendError(
           client.socket,
-          `Team ${event.teamId} is full (${cap}/${cap}). Choose another team.`,
+          `Team ${event.teamId} is full (${connectedCount}/${cap}). Pick another team.`,
+        );
+        return;
+      }
+    }
+
+    // Legacy teamCaps (admin path) still applies.
+    const legacyCap = game.teamCaps?.[event.teamId];
+    if (legacyCap !== undefined && !existingPlayer) {
+      const connectedCount = team.players.filter((p) => p.connected).length;
+      if (connectedCount >= legacyCap) {
+        this.sendError(
+          client.socket,
+          `Team ${event.teamId} is full (${connectedCount}/${legacyCap}). Choose another team.`,
         );
         return;
       }
@@ -880,30 +912,7 @@ export class GameGateway {
 
     this.clampRotations(game);
 
-    // Auto-start PvP when a second team joins.
-    if (game.battleMode === 'pvp' && game.phase === 'waiting') {
-      const populated = ALL_TEAMS.filter(
-        (id) => game.teams[id].players.length > 0,
-      );
-
-      if (populated.length >= 2) {
-        const [teamA, teamB] = populated;
-        game.activeTeams = populated;
-        game.currentTeamId = teamA;
-        game.phase = 'battle';
-
-        game.battle = this.combatEngine.createTeamBattle(game, teamA, teamB);
-
-        if (game.battle) {
-          game.battle.queuedActions = [];
-          game.battle.readyPlayerIds = [];
-          game.battle.log.push(`${teamA} and ${teamB} meet in the arena.`);
-        }
-
-        this.broadcastRoundState(game);
-        this.startRoundTimeout(game);
-      }
-    }
+    // NOTE: PvP no longer auto-starts. The host must send START_PVP.
 
     this.broadcastStory(roomCode);
     this.broadcastState(roomCode);
@@ -1873,7 +1882,6 @@ export class GameGateway {
       this.playCutscene(cutscene, 'battle', false, game.roomCode);
     }
 
-    // Battle modes loop instead of advancing the story.
     if (game.battleMode === 'cpu') {
       game.battle = undefined;
       game.phase = 'battle';
@@ -1888,17 +1896,17 @@ export class GameGateway {
           fresh,
           fresh.currentTeamId,
           nextEnemy,
-          config.hp,
-          config.hp,
+          config?.hp ?? 1200,
+          config?.hp ?? 1200,
           {
-            attack: config.attack,
-            personality: config.personality,
-            abilityChance: config.abilityChance,
-            signatureEveryNRounds: config.signatureEveryNRounds,
-            signatureMultiplier: config.signatureMultiplier,
-            telegraphs: config.telegraphs,
-            phases: config.phases,
-            abilities: config.abilities,
+            attack: config?.attack ?? 100,
+            personality: config?.personality ?? 'aggressive',
+            abilityChance: config?.abilityChance ?? 0.35,
+            signatureEveryNRounds: config?.signatureEveryNRounds ?? 4,
+            signatureMultiplier: config?.signatureMultiplier ?? 1.6,
+            telegraphs: config?.telegraphs,
+            phases: config?.phases,
+            abilities: config?.abilities,
           },
         );
         if (fresh.battle) {
@@ -1914,13 +1922,13 @@ export class GameGateway {
     }
 
     if (game.battleMode === 'pvp') {
+      // Return to the waiting screen. Host can start a new match.
       game.battle = undefined;
       game.phase = 'waiting';
       this.broadcastState(game.roomCode);
       return;
     }
 
-    // Default: story mode continues as before.
     game.phase = 'story';
     game.battle = undefined;
 
