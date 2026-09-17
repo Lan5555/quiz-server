@@ -214,8 +214,8 @@ export class GameGateway {
   private lastCutsceneNodeId: string | null = null;
 
   private resolvingRound = false;
-  private roundTimeoutHandle: NodeJS.Timeout | null = null;
-  private storyTimeoutHandle: NodeJS.Timeout | null = null;
+  private roundTimeoutHandles = new Map<string, NodeJS.Timeout>();
+  private storyTimeoutHandles = new Map<string, NodeJS.Timeout>();
 
   /* ================================================================== */
   /* Connection                                                          */
@@ -278,8 +278,14 @@ export class GameGateway {
 
   private handleEvent(client: ConnectedClient, event: GameEvent) {
     switch (event.type) {
+      case 'CREATE_ROOM':
+        this.createRoom(client, event);
+        break;
       case 'JOIN_GAME':
         this.joinGame(client, event);
+        break;
+      case 'START_PVP':
+        this.startPvpMatch(client, event);
         break;
       case 'WATCH_GAME':
         this.watchGame(client, event);
@@ -309,8 +315,6 @@ export class GameGateway {
         this.approveRoom(client, event);
         break;
       case 'ADMIN_GET_ROOMS':
-        // Admin requests the room list — mark as watcher so future
-        // broadcasts reach them, and send the current snapshot.
         client.watcher = true;
         this.sendRoomList(client.socket);
         this.sendPlayerList(client.socket);
@@ -320,7 +324,7 @@ export class GameGateway {
           this.sendError(client.socket, 'You are not inside a game.');
           return;
         }
-        this.broadcastEvent(GLOBAL_ROOM, event);
+        this.broadcastEvent(client.roomCode, event);
         break;
       case 'LEAVE_ROOM':
         this.removeFromRoom(client);
@@ -345,14 +349,190 @@ export class GameGateway {
   }
 
   /* ================================================================== */
+  /* Room creation                                                       */
+  /* ================================================================== */
+
+  private createRoom(
+    client: ConnectedClient,
+    event: Extract<GameEvent, { type: 'CREATE_ROOM' }>,
+  ) {
+    const roomCode = this.generateRoomCode();
+    const game = this.gameStore.createRoom(roomCode);
+
+    if (!game) {
+      this.sendError(client.socket, 'Could not create room.');
+      return;
+    }
+
+    client.watcher = false;
+    client.roomCode = roomCode;
+    client.playerId = event.playerId;
+    void client.socket.join(roomCode);
+
+    const team = game.teams[event.teamId];
+    team.players.push({
+      id: event.playerId,
+      name: (event.playerName ?? 'Player').trim() || 'Player',
+      teamId: event.teamId,
+      hp: 2000,
+      maxHp: 2000,
+      status: 'alive',
+      ready: false,
+      connected: true,
+      breakMeter: 0,
+      statusEffects: [],
+    });
+
+    game.battleMode = event.battleMode;
+    game.hostPlayerId = event.playerId;
+    game.activeTeams = [event.teamId];
+    game.currentTeamId = event.teamId;
+    game.playerRotation = { [event.teamId]: 0 };
+    game.activePlayerId = event.playerId;
+    game.lastActivePlayerId = event.playerId;
+
+    if (event.battleMode === 'cpu') {
+      // Vs Enemies: fight starts immediately.
+      const enemyName = event.enemyName ?? this.pickRandomOpeningEnemy();
+      const config = ENEMY_CONFIGS[enemyName];
+
+      game.phase = 'battle';
+      game.battle = this.combatEngine.createCpuBattle(
+        game,
+        event.teamId,
+        enemyName,
+        config.hp,
+        config.hp,
+        {
+          attack: config.attack,
+          personality: config.personality,
+          abilityChance: config.abilityChance,
+          signatureEveryNRounds: config.signatureEveryNRounds,
+          signatureMultiplier: config.signatureMultiplier,
+          telegraphs: config.telegraphs,
+          phases: config.phases,
+          abilities: config.abilities,
+        },
+      );
+
+      if (game.battle) {
+        game.battle.queuedActions = [];
+        game.battle.readyPlayerIds = [];
+        game.battle.log.push(`${enemyName} emerges from the Highlands.`);
+      }
+
+      this.broadcastRoundState(game);
+      this.startRoundTimeout(game);
+    } else {
+      // PvP: wait for other players to join.
+      game.phase = 'waiting';
+    }
+
+    this.send(client.socket, {
+      type: 'ROOM_CREATED',
+      roomCode,
+      teamId: event.teamId,
+      battleMode: event.battleMode,
+    });
+
+    this.sendState(client.socket, game);
+  }
+
+  private generateRoomCode(): string {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    for (let attempt = 0; attempt < 8; attempt++) {
+      let code = '';
+      for (let i = 0; i < 6; i++) {
+        code += alphabet[Math.floor(Math.random() * alphabet.length)];
+      }
+      if (!this.gameStore.getGame(code)) return code;
+    }
+    return `R${Date.now().toString(36).toUpperCase()}`;
+  }
+
+  private pickRandomOpeningEnemy(): string {
+    const pool = [
+      'THE BELL KEEPER',
+      'BLOOD HUNTERS',
+      'THE REMNANT',
+      'HOLLOW KNIGHTS',
+    ];
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  private startPvpMatch(
+    client: ConnectedClient,
+    event: Extract<GameEvent, { type: 'START_PVP' }>,
+  ) {
+    const roomCode = client.roomCode;
+    if (!roomCode) return;
+    const game = this.gameStore.getGame(roomCode);
+    if (!game || game.battleMode !== 'pvp') return;
+    if (game.phase !== 'waiting') return;
+
+    const populated = ALL_TEAMS.filter(
+      (id) => game.teams[id].players.length > 0,
+    );
+
+    if (populated.length < 2) {
+      // Not enough players — send an enemy instead.
+      const enemyName = this.pickRandomOpeningEnemy();
+      const config = ENEMY_CONFIGS[enemyName];
+      game.phase = 'battle';
+      game.battle = this.combatEngine.createCpuBattle(
+        game,
+        game.currentTeamId,
+        enemyName,
+        config.hp,
+        config.hp,
+        {
+          attack: config.attack,
+          personality: config.personality,
+          abilityChance: config.abilityChance,
+          signatureEveryNRounds: config.signatureEveryNRounds,
+          signatureMultiplier: config.signatureMultiplier,
+          telegraphs: config.telegraphs,
+          phases: config.phases,
+          abilities: config.abilities,
+        },
+      );
+      if (game.battle) {
+        game.battle.queuedActions = [];
+        game.battle.readyPlayerIds = [];
+        game.battle.log.push(`${enemyName} steps into the arena.`);
+      }
+      this.broadcastRoundState(game);
+      this.startRoundTimeout(game);
+      this.broadcastState(roomCode);
+      return;
+    }
+
+    const [teamA, teamB] = populated;
+    game.activeTeams = populated;
+    game.currentTeamId = teamA;
+    game.phase = 'battle';
+
+    game.battle = this.combatEngine.createTeamBattle(game, teamA, teamB);
+
+    if (game.battle) {
+      game.battle.queuedActions = [];
+      game.battle.readyPlayerIds = [];
+      game.battle.log.push(`${teamA} and ${teamB} meet in the arena.`);
+    }
+
+    this.broadcastRoundState(game);
+    this.startRoundTimeout(game);
+    this.broadcastState(roomCode);
+  }
+
+  /* ================================================================== */
   /* Admin — player list + kick                                          */
   /* ================================================================== */
 
   private sendPlayerList(socket: Socket) {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
     const players: AdminPlayerSummary[] = [];
 
-    if (game) {
+    for (const game of this.gameStore.getAllGames()) {
       for (const team of Object.values(game.teams)) {
         for (const p of team.players) {
           players.push({
@@ -379,10 +559,9 @@ export class GameGateway {
   }
 
   private broadcastPlayerList() {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
     const players: AdminPlayerSummary[] = [];
 
-    if (game) {
+    for (const game of this.gameStore.getAllGames()) {
       for (const team of Object.values(game.teams)) {
         for (const p of team.players) {
           players.push({
@@ -399,10 +578,7 @@ export class GameGateway {
       }
     }
 
-    const event = {
-      type: 'PLAYER_LIST_UPDATE' as const,
-      players,
-    };
+    const event = { type: 'PLAYER_LIST_UPDATE' as const, players };
 
     for (const client of this.clients) {
       if (client.watcher) {
@@ -412,9 +588,9 @@ export class GameGateway {
   }
 
   private adminKickPlayer(client: ConnectedClient, playerId: string) {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    const game = this.findGameByPlayer(playerId);
     if (!game) {
-      this.sendError(client.socket, 'Game not found.');
+      this.sendError(client.socket, 'Player not found.');
       return;
     }
 
@@ -426,22 +602,14 @@ export class GameGateway {
 
     const team = game.teams[player.teamId];
     const idx = team.players.findIndex((p) => p.id === playerId);
-    if (idx >= 0) {
-      team.players.splice(idx, 1);
-    }
+    if (idx >= 0) team.players.splice(idx, 1);
 
     this.clampRotations(game);
 
-    if (game.activePlayerId === playerId) {
-      this.advanceActivePlayer(game);
-    }
+    if (game.activePlayerId === playerId) this.advanceActivePlayer(game);
 
-    this.broadcastEvent(GLOBAL_ROOM, {
-      type: 'ELIMINATE',
-      playerId,
-    });
-
-    this.broadcastState();
+    this.broadcastEvent(game.roomCode, { type: 'ELIMINATE', playerId });
+    this.broadcastState(game.roomCode);
     this.broadcastRoomList();
     this.broadcastPlayerList();
 
@@ -451,92 +619,92 @@ export class GameGateway {
   }
 
   /* ================================================================== */
-  /* Timers                                                              */
+  /* Timers (per-room)                                                   */
   /* ================================================================== */
 
-  private clearRoundTimeout() {
-    if (this.roundTimeoutHandle) {
-      clearTimeout(this.roundTimeoutHandle);
-      this.roundTimeoutHandle = null;
+  private clearRoundTimeout(roomCode: string) {
+    const handle = this.roundTimeoutHandles.get(roomCode);
+    if (handle) {
+      clearTimeout(handle);
+      this.roundTimeoutHandles.delete(roomCode);
     }
-    this.broadcastEvent(GLOBAL_ROOM, { type: 'ROUND_TIMER', remainingMs: 0 });
+    this.broadcastEvent(roomCode, { type: 'ROUND_TIMER', remainingMs: 0 });
   }
 
-  private clearStoryTimeout() {
-    if (this.storyTimeoutHandle) {
-      clearTimeout(this.storyTimeoutHandle);
-      this.storyTimeoutHandle = null;
+  private clearStoryTimeout(roomCode: string) {
+    const handle = this.storyTimeoutHandles.get(roomCode);
+    if (handle) {
+      clearTimeout(handle);
+      this.storyTimeoutHandles.delete(roomCode);
     }
   }
 
-  private startRoundTimeout(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-  ) {
-    this.clearRoundTimeout();
+  private startRoundTimeout(game: GameState) {
+    this.clearRoundTimeout(game.roomCode);
 
-    this.roundTimeoutHandle = setTimeout(() => {
+    const handle = setTimeout(() => {
       this.logger.warn(
         `Round timeout fired: room=${game.roomCode} team=${game.battle?.turnTeamId}`,
       );
-      void this.handleRoundTimeout();
+      void this.handleRoundTimeout(game.roomCode);
     }, ROUND_DECISION_TIMEOUT_MS);
 
-    this.broadcastEvent(GLOBAL_ROOM, {
+    this.roundTimeoutHandles.set(game.roomCode, handle);
+
+    this.broadcastEvent(game.roomCode, {
       type: 'ROUND_TIMER',
       remainingMs: ROUND_DECISION_TIMEOUT_MS,
     });
   }
 
-  private async handleRoundTimeout() {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+  private async handleRoundTimeout(roomCode: string) {
+    const game = this.gameStore.getGame(roomCode);
     const battle = game?.battle;
 
     if (!game || !battle || battle.status !== 'active') {
-      this.clearRoundTimeout();
+      this.clearRoundTimeout(roomCode);
       return;
     }
 
-    if (this.resolvingRound) {
-      return;
-    }
+    if (this.resolvingRound) return;
 
     this.logger.log(
-      `Auto-resolving round: team=${battle.turnTeamId} queued=${battle.queuedActions?.length ?? 0}`,
+      `Auto-resolving round: room=${roomCode} team=${battle.turnTeamId} queued=${battle.queuedActions?.length ?? 0}`,
     );
 
     await this.resolveRound(game);
   }
 
-  private startStoryTimeout(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-  ) {
-    this.clearStoryTimeout();
+  private startStoryTimeout(game: GameState) {
+    this.clearStoryTimeout(game.roomCode);
     if (game.phase !== 'story') return;
 
-    this.storyTimeoutHandle = setTimeout(() => {
+    const handle = setTimeout(() => {
       this.logger.warn(
         `Story timeout fired: room=${game.roomCode} team=${game.currentTeamId} player=${game.activePlayerId}`,
       );
-      this.handleStoryTimeout();
+      this.handleStoryTimeout(game.roomCode);
     }, STORY_DECISION_TIMEOUT_MS);
+
+    this.storyTimeoutHandles.set(game.roomCode, handle);
   }
 
-  private handleStoryTimeout() {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+  private handleStoryTimeout(roomCode: string) {
+    const game = this.gameStore.getGame(roomCode);
     if (!game || game.phase !== 'story') {
-      this.clearStoryTimeout();
+      this.clearStoryTimeout(roomCode);
       return;
     }
 
-    this.broadcastEvent(GLOBAL_ROOM, {
+    this.broadcastEvent(roomCode, {
       type: 'BATTLE_UPDATE',
       mode: 'team',
       message: 'Time expired — the turn passes.',
     });
 
     this.advanceActivePlayer(game);
-    this.broadcastStory();
-    this.broadcastState();
+    this.broadcastStory(roomCode);
+    this.broadcastState(roomCode);
     this.broadcastRoomList();
   }
 
@@ -545,35 +713,36 @@ export class GameGateway {
   /* ================================================================== */
 
   private getOrCreateGlobalGame() {
-    const game = this.gameStore.getOrCreateGlobalGame();
-
-    if (!game.currentNodeId) {
-      const initialNode = this.storyEngine.getInitialNode();
-      if (initialNode) {
-        game.currentNodeId = initialNode.id;
+    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    if (game) {
+      if (!game.currentNodeId) {
+        const node = this.storyEngine.getInitialNode();
+        if (node) game.currentNodeId = node.id;
       }
+      return game;
     }
 
-    return game;
+    const fresh = this.gameStore.createRoom(GLOBAL_ROOM_CODE);
+    const node = this.storyEngine.getInitialNode();
+    if (node) fresh.currentNodeId = node.id;
+    return fresh;
   }
 
   private removeFromRoom(client: ConnectedClient) {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    const roomCode = client.roomCode;
+    if (!roomCode) return;
+    const game = this.gameStore.getGame(roomCode);
 
     if (game && client.playerId) {
       const player = this.findPlayer(game, client.playerId);
-      if (player) {
-        player.connected = false;
-      }
+      if (player) player.connected = false;
     }
 
-    if (client.roomCode) {
-      void client.socket.leave(client.roomCode);
-      client.roomCode = undefined;
-    }
+    void client.socket.leave(roomCode);
+    client.roomCode = undefined;
 
     if (game) {
-      this.broadcastState();
+      this.broadcastState(roomCode);
       this.broadcastRoomList();
     }
     this.broadcastPlayerList();
@@ -583,7 +752,7 @@ export class GameGateway {
     client: ConnectedClient,
     event: Extract<GameEvent, { type: 'LEAVE_GAME' }>,
   ) {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    const game = this.findGameByPlayer(event.playerId);
     if (!game) return;
 
     for (const team of Object.values(game.teams)) {
@@ -602,7 +771,7 @@ export class GameGateway {
 
     this.clampRotations(game);
 
-    this.broadcastState();
+    this.broadcastState(game.roomCode);
     this.broadcastRoomList();
     this.broadcastPlayerList();
   }
@@ -611,9 +780,19 @@ export class GameGateway {
     client: ConnectedClient,
     event: Extract<GameEvent, { type: 'JOIN_GAME' }>,
   ) {
-    const game = this.getOrCreateGlobalGame();
-    const team = game.teams[event.teamId];
+    const roomCode = event.roomCode ?? client.roomCode ?? GLOBAL_ROOM_CODE;
+    const game =
+      roomCode === GLOBAL_ROOM_CODE
+        ? this.getOrCreateGlobalGame()
+        : this.gameStore.getGame(roomCode);
 
+    if (!game) {
+      this.sendError(client.socket, 'Room not found.');
+      this.send(client.socket, { type: 'ROOM_NOT_FOUND', roomCode });
+      return;
+    }
+
+    const team = game.teams[event.teamId];
     if (!team) {
       this.sendError(client.socket, 'Invalid team.');
       return;
@@ -646,10 +825,8 @@ export class GameGateway {
     }
 
     const cap = game.teamCaps?.[event.teamId];
-
     if (cap !== undefined) {
       const connectedCount = team.players.filter((p) => p.connected).length;
-
       if (!existingPlayer && connectedCount >= cap) {
         this.sendError(
           client.socket,
@@ -662,7 +839,7 @@ export class GameGateway {
     if (
       client.playerId &&
       client.playerId !== event.playerId &&
-      client.roomCode === GLOBAL_ROOM
+      client.roomCode === roomCode
     ) {
       for (const t of Object.values(game.teams)) {
         const idx = t.players.findIndex((p) => p.id === client.playerId);
@@ -692,19 +869,44 @@ export class GameGateway {
       existingPlayer.name = desiredName;
     }
 
-    if (client.roomCode && client.roomCode !== GLOBAL_ROOM) {
+    if (client.roomCode && client.roomCode !== roomCode) {
       void client.socket.leave(client.roomCode);
     }
-    void client.socket.join(GLOBAL_ROOM);
+    void client.socket.join(roomCode);
 
     client.playerId = event.playerId;
-    client.roomCode = GLOBAL_ROOM;
+    client.roomCode = roomCode;
     client.watcher = false;
 
     this.clampRotations(game);
 
-    this.broadcastStory();
-    this.broadcastState();
+    // Auto-start PvP when a second team joins.
+    if (game.battleMode === 'pvp' && game.phase === 'waiting') {
+      const populated = ALL_TEAMS.filter(
+        (id) => game.teams[id].players.length > 0,
+      );
+
+      if (populated.length >= 2) {
+        const [teamA, teamB] = populated;
+        game.activeTeams = populated;
+        game.currentTeamId = teamA;
+        game.phase = 'battle';
+
+        game.battle = this.combatEngine.createTeamBattle(game, teamA, teamB);
+
+        if (game.battle) {
+          game.battle.queuedActions = [];
+          game.battle.readyPlayerIds = [];
+          game.battle.log.push(`${teamA} and ${teamB} meet in the arena.`);
+        }
+
+        this.broadcastRoundState(game);
+        this.startRoundTimeout(game);
+      }
+    }
+
+    this.broadcastStory(roomCode);
+    this.broadcastState(roomCode);
     this.broadcastRoomList();
     this.broadcastPlayerList();
   }
@@ -713,37 +915,41 @@ export class GameGateway {
     client: ConnectedClient,
     event: Extract<GameEvent, { type: 'WATCH_GAME' }>,
   ) {
-    const game = this.getOrCreateGlobalGame();
+    const roomCode = event.roomCode || GLOBAL_ROOM_CODE;
+    const game =
+      roomCode === GLOBAL_ROOM_CODE
+        ? this.getOrCreateGlobalGame()
+        : this.gameStore.getGame(roomCode);
+
+    if (!game) {
+      this.sendError(client.socket, 'Room not found.');
+      return;
+    }
 
     client.watcher = true;
-
-    if (client.roomCode && client.roomCode !== GLOBAL_ROOM) {
+    if (client.roomCode && client.roomCode !== roomCode) {
       void client.socket.leave(client.roomCode);
     }
-    void client.socket.join(GLOBAL_ROOM);
+    void client.socket.join(roomCode);
 
-    client.roomCode = GLOBAL_ROOM;
+    client.roomCode = roomCode;
     client.playerId = event.watcherId;
 
-    for (const past of this.recentEvents) {
-      this.send(client.socket, past);
-    }
+    for (const past of this.recentEvents) this.send(client.socket, past);
 
-    this.broadcastStory();
+    this.broadcastStory(roomCode);
     this.sendState(client.socket, game);
     this.sendRoomList(client.socket);
     this.sendPlayerList(client.socket);
   }
 
   private playerReady(client: ConnectedClient, playerId: string) {
-    const game = this.getGlobalGame(client);
+    const game = this.findGameByPlayer(playerId);
     if (!game) return;
-
     const player = this.findPlayer(game, playerId);
     if (!player) return;
-
     player.ready = true;
-    this.broadcastState();
+    this.broadcastState(game.roomCode);
     this.broadcastRoomList();
   }
 
@@ -755,7 +961,8 @@ export class GameGateway {
     client: ConnectedClient,
     event: Extract<GameEvent, { type: 'ADMIN_APPROVE_ROOM' }>,
   ) {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    const roomCode = event.roomId || client.roomCode || GLOBAL_ROOM_CODE;
+    const game = this.gameStore.getGame(roomCode);
     if (!game) {
       this.sendError(client.socket, 'Game not found.');
       return;
@@ -779,7 +986,6 @@ export class GameGateway {
           .filter((id) => event.teamCaps![id] !== undefined)
           .map((id) => [id, event.teamCaps![id]]),
       ) as Partial<Record<TeamId, number>>;
-
       game.teamCaps = filteredCaps;
     }
 
@@ -788,9 +994,7 @@ export class GameGateway {
     game.phase = 'story';
 
     game.playerRotation = {};
-    for (const teamId of populated) {
-      game.playerRotation[teamId] = 0;
-    }
+    for (const teamId of populated) game.playerRotation[teamId] = 0;
 
     const firstTeam = game.teams[populated[0]];
     const firstAlive = firstTeam.players.find((p) => p.status === 'alive');
@@ -800,29 +1004,29 @@ export class GameGateway {
     this.seenCutscenes.clear();
     this.lastCutsceneNodeId = null;
 
-    this.broadcastEvent(GLOBAL_ROOM, {
+    this.broadcastEvent(roomCode, {
       type: 'TEAM_TURN',
       teamId: populated[0],
       activePlayerId: game.activePlayerId,
     });
 
     this.startStoryTimeout(game);
-
-    this.broadcastStory();
-    this.broadcastState();
+    this.broadcastStory(roomCode);
+    this.broadcastState(roomCode);
     this.broadcastRoomList();
     this.broadcastPlayerList();
   }
 
   private changeTeamTurn(client: ConnectedClient, teamId: TeamId) {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    const roomCode = client.roomCode;
+    if (!roomCode) return;
+    const game = this.gameStore.getGame(roomCode);
     if (!game) {
       this.sendError(client.socket, 'Game not found.');
       return;
     }
 
     game.currentTeamId = teamId;
-
     const team = game.teams[teamId];
     const alive = team.players.filter(
       (p) =>
@@ -836,20 +1040,19 @@ export class GameGateway {
     game.activePlayerId = alive[safeIdx]?.id;
     game.lastActivePlayerId = game.activePlayerId;
 
-    this.broadcastEvent(GLOBAL_ROOM, {
+    this.broadcastEvent(roomCode, {
       type: 'TEAM_TURN',
       teamId,
       activePlayerId: game.activePlayerId,
     });
 
     this.startStoryTimeout(game);
-
-    this.broadcastState();
+    this.broadcastState(roomCode);
     this.broadcastRoomList();
   }
 
   private eliminatePlayer(client: ConnectedClient, playerId: string) {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    const game = this.findGameByPlayer(playerId);
     if (!game) {
       this.sendError(client.socket, 'Game not found.');
       return;
@@ -866,8 +1069,8 @@ export class GameGateway {
 
     this.clampRotations(game);
 
-    this.broadcastEvent(GLOBAL_ROOM, { type: 'ELIMINATE', playerId });
-    this.broadcastState();
+    this.broadcastEvent(game.roomCode, { type: 'ELIMINATE', playerId });
+    this.broadcastState(game.roomCode);
     this.broadcastRoomList();
     this.broadcastPlayerList();
   }
@@ -876,9 +1079,7 @@ export class GameGateway {
   /* Turn rotation                                                       */
   /* ================================================================== */
 
-  private advanceActivePlayer(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-  ) {
+  private advanceActivePlayer(game: GameState) {
     const team = game.teams[game.currentTeamId];
     const alive = team.players.filter(
       (p) =>
@@ -901,18 +1102,17 @@ export class GameGateway {
     game.activePlayerId = alive[nextIndex].id;
     game.lastActivePlayerId = game.activePlayerId;
 
-    this.broadcastEvent(GLOBAL_ROOM, {
+    this.broadcastEvent(game.roomCode, {
       type: 'TEAM_TURN',
       teamId: game.currentTeamId,
       activePlayerId: game.activePlayerId,
     });
 
     this.startStoryTimeout(game);
-
     this.advanceTeam(game);
   }
 
-  private advanceTeam(game: NonNullable<ReturnType<GameStore['getGame']>>) {
+  private advanceTeam(game: GameState) {
     const pool = game.activeTeams ?? ALL_TEAMS;
     const canAct = (teamId: TeamId) =>
       game.teams[teamId].players.some(
@@ -929,7 +1129,6 @@ export class GameGateway {
       if (!canAct(candidate)) continue;
 
       game.currentTeamId = candidate;
-
       const team = game.teams[candidate];
       const alive = team.players.filter(
         (p) =>
@@ -944,7 +1143,7 @@ export class GameGateway {
       game.activePlayerId = alive[safeIdx].id;
       game.lastActivePlayerId = game.activePlayerId;
 
-      this.broadcastEvent(GLOBAL_ROOM, {
+      this.broadcastEvent(game.roomCode, {
         type: 'TEAM_TURN',
         teamId: candidate,
         activePlayerId: game.activePlayerId,
@@ -955,16 +1154,17 @@ export class GameGateway {
     }
 
     game.phase = 'ended';
-    this.clearRoundTimeout();
-    this.clearStoryTimeout();
+    this.clearRoundTimeout(game.roomCode);
+    this.clearStoryTimeout(game.roomCode);
 
     setTimeout(() => {
-      void this.restartGame();
+      void this.restartGame(game.roomCode);
     }, 15_000);
-    this.broadcastState();
+
+    this.broadcastState(game.roomCode);
   }
 
-  private clampRotations(game: NonNullable<ReturnType<GameStore['getGame']>>) {
+  private clampRotations(game: GameState) {
     game.playerRotation = game.playerRotation ?? {};
     for (const teamId of Object.keys(game.teams) as TeamId[]) {
       const alive = game.teams[teamId].players.filter(
@@ -988,8 +1188,13 @@ export class GameGateway {
       return;
     }
 
-    const game = this.getGlobalGame(client);
-    if (!game) return;
+    const roomCode = client.roomCode;
+    if (!roomCode) return;
+    const game = this.gameStore.getGame(roomCode);
+    if (!game) {
+      this.sendError(client.socket, 'Game not found.');
+      return;
+    }
 
     const player = this.findPlayer(game, event.playerId);
     if (!player) {
@@ -1015,14 +1220,10 @@ export class GameGateway {
       return;
     }
 
-    this.clearStoryTimeout();
+    this.clearStoryTimeout(roomCode);
 
     const { choice } = result;
-    this.logger.debug(
-      `Choice resolved: id=${choice.id} result=${choice.result}`,
-    );
-
-    this.playCutscene(choice.cutscene, 'story', false);
+    this.playCutscene(choice.cutscene, 'story', false, roomCode);
 
     if (choice.result === 'battle') {
       this.startBattleFromChoice(game, choice);
@@ -1031,16 +1232,16 @@ export class GameGateway {
 
     if (choice.result === 'safe') {
       this.advanceActivePlayer(game);
-      this.broadcastStory();
-      this.broadcastState();
+      this.broadcastStory(roomCode);
+      this.broadcastState(roomCode);
       this.broadcastRoomList();
       return;
     }
 
     if (choice.result === 'random') {
       this.handleRandomEncounter(game, choice.nextNodeId, choice.onBattle);
-      this.broadcastStory();
-      this.broadcastState();
+      this.broadcastStory(roomCode);
+      this.broadcastState(roomCode);
       this.broadcastRoomList();
       return;
     }
@@ -1055,35 +1256,31 @@ export class GameGateway {
       game.creditsStartedAt = Date.now();
       game.creditsDurationMs = 68000;
 
-      this.clearStoryTimeout();
-      this.clearRoundTimeout();
+      this.clearStoryTimeout(roomCode);
+      this.clearRoundTimeout(roomCode);
 
-      this.broadcastEvent(GLOBAL_ROOM, {
+      this.broadcastEvent(roomCode, {
         type: 'CREDITS',
         durationMs: game.creditsDurationMs,
         startedAt: game.creditsStartedAt,
       });
 
-      this.broadcastState();
+      this.broadcastState(roomCode);
       this.broadcastRoomList();
       return;
     }
 
-    this.broadcastStory();
-    this.broadcastState();
+    this.broadcastStory(roomCode);
+    this.broadcastState(roomCode);
     this.broadcastRoomList();
   }
 
-  private startBattleFromChoice(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-    choice: StoryChoice,
-  ) {
+  private startBattleFromChoice(game: GameState, choice: StoryChoice) {
     let teamA: TeamId | null = null;
     let teamB: TeamId | null = null;
 
-    if (choice.versus) {
-      [teamA, teamB] = choice.versus;
-    } else if (choice.enemyTeamId) {
+    if (choice.versus) [teamA, teamB] = choice.versus;
+    else if (choice.enemyTeamId) {
       teamA = game.currentTeamId;
       teamB = choice.enemyTeamId;
     }
@@ -1091,30 +1288,13 @@ export class GameGateway {
     const sideHasAlive = (teamId: TeamId) =>
       game.teams[teamId].players.some((p) => p.status === 'alive');
 
-    if (teamA && teamB) {
-      const aAlive = sideHasAlive(teamA);
-      const bAlive = sideHasAlive(teamB);
-
-      if (!aAlive || !bAlive) {
-        const standing = aAlive ? teamA : bAlive ? teamB : null;
-        const fallen = aAlive ? teamB : bAlive ? teamA : null;
-
-        this.broadcastEvent(GLOBAL_ROOM, {
-          type: 'BATTLE_UPDATE',
-          mode: 'team',
-          message: standing
-            ? `${fallen} could not answer the challenge. ${standing} walks on.`
-            : `Both sides have fallen. The path is silent.`,
-        });
-
-        game.phase = 'story';
-        if (choice.nextNodeId) game.currentNodeId = choice.nextNodeId;
-
-        this.broadcastStory();
-        this.broadcastState();
-        this.broadcastRoomList();
-        return;
-      }
+    if (teamA && teamB && (!sideHasAlive(teamA) || !sideHasAlive(teamB))) {
+      game.phase = 'story';
+      if (choice.nextNodeId) game.currentNodeId = choice.nextNodeId;
+      this.broadcastStory(game.roomCode);
+      this.broadcastState(game.roomCode);
+      this.broadcastRoomList();
+      return;
     }
 
     game.phase = 'battle';
@@ -1172,9 +1352,8 @@ export class GameGateway {
       if (!sideHasAlive(defenderTeam)) {
         game.phase = 'story';
         if (choice.nextNodeId) game.currentNodeId = choice.nextNodeId;
-
-        this.broadcastStory();
-        this.broadcastState();
+        this.broadcastStory(game.roomCode);
+        this.broadcastState(game.roomCode);
         this.broadcastRoomList();
         return;
       }
@@ -1192,56 +1371,41 @@ export class GameGateway {
       game.battle.readyPlayerIds = [];
     }
 
-    this.playCutscene(choice.onBattle, 'battle', false);
-
+    this.playCutscene(choice.onBattle, 'battle', false, game.roomCode);
     this.broadcastRoundState(game);
     this.startRoundTimeout(game);
-
-    this.broadcastStory();
-    this.broadcastState();
+    this.broadcastStory(game.roomCode);
+    this.broadcastState(game.roomCode);
     this.broadcastRoomList();
   }
 
-  private resolveElimination(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-    choice: StoryChoice,
-  ) {
-    const teamId = game.currentTeamId;
-    const team = game.teams[teamId];
-
+  private resolveElimination(game: GameState, choice: StoryChoice) {
+    const team = game.teams[game.currentTeamId];
     const candidates = team.players
       .filter((p) => p.status === 'alive')
       .sort((a, b) => a.hp - b.hp);
-
     const victim = candidates[0];
 
     if (victim) {
       victim.status = 'eliminated';
       victim.hp = 0;
-
-      this.broadcastEvent(GLOBAL_ROOM, {
+      this.broadcastEvent(game.roomCode, {
         type: 'ELIMINATE',
         playerId: victim.id,
       });
-
-      this.logger.log(
-        `Elimination at ${game.currentNodeId}: ${victim.name} (${teamId})`,
-      );
     }
 
     game.phase = 'story';
     if (choice.nextNodeId) game.currentNodeId = choice.nextNodeId;
-
     this.clampRotations(game);
-
     this.advanceActivePlayer(game);
-    this.broadcastStory();
-    this.broadcastState();
+    this.broadcastStory(game.roomCode);
+    this.broadcastState(game.roomCode);
     this.broadcastRoomList();
   }
 
   private handleRandomEncounter(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
+    game: GameState,
     nextNodeId?: string,
     onBattle?: Cutscene,
   ) {
@@ -1256,9 +1420,7 @@ export class GameGateway {
     const sampleMaxHp = alive[0]?.maxHp ?? 1000;
     const damageRatio =
       sampleMaxHp > 0 ? 1 - Math.min(1, avgHp / sampleMaxHp) : 0;
-
     const sizeFactor = aliveCount <= 1 ? 0.25 : aliveCount === 2 ? 0.1 : 0;
-
     const encounterChance = 0.4 + damageRatio * 0.2 + sizeFactor;
 
     if (Math.random() > encounterChance) {
@@ -1267,7 +1429,6 @@ export class GameGateway {
     }
 
     const teamStrength = aliveCount * 200 + avgHp * 0.6;
-
     const tier: 'low' | 'mid' | 'elite' =
       teamStrength > 1600 ? 'elite' : teamStrength > 900 ? 'mid' : 'low';
 
@@ -1397,7 +1558,6 @@ export class GameGateway {
     const encounter = this.weightedPick(pool);
 
     game.phase = 'battle';
-
     game.battle = this.combatEngine.createCpuBattle(
       game,
       game.currentTeamId,
@@ -1418,10 +1578,8 @@ export class GameGateway {
       game.battle.queuedActions = [];
       game.battle.readyPlayerIds = [];
       game.battle.intro = onBattle;
-
       game.battle.log.push(`${encounter.name} emerges from the Highlands.`);
-
-      this.playCutscene(onBattle, 'battle', false);
+      this.playCutscene(onBattle, 'battle', false, game.roomCode);
     }
 
     this.broadcastRoundState(game);
@@ -1442,10 +1600,7 @@ export class GameGateway {
   /* Combat queue                                                        */
   /* ================================================================== */
 
-  private expectedActors(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-    battle: Battle,
-  ): Player[] {
+  private expectedActors(game: GameState, battle: Battle): Player[] {
     const teamId =
       battle.mode === 'team' ? battle.turnTeamId : battle.attackerTeamId;
     const team = game.teams[teamId];
@@ -1457,9 +1612,7 @@ export class GameGateway {
     );
   }
 
-  private broadcastRoundState(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-  ) {
+  private broadcastRoundState(game: GameState) {
     const battle = game.battle;
     if (!battle) return;
 
@@ -1467,7 +1620,7 @@ export class GameGateway {
     const ready = new Set(battle.readyPlayerIds ?? []);
     const waitingOn = expected.filter((p) => !ready.has(p.id)).map((p) => p.id);
 
-    this.broadcastEvent(GLOBAL_ROOM, {
+    this.broadcastEvent(game.roomCode, {
       type: 'COMBAT_ROUND_UPDATE',
       waitingOn,
       expected: expected.length,
@@ -1483,7 +1636,9 @@ export class GameGateway {
       return;
     }
 
-    const game = this.getGlobalGame(client);
+    const roomCode = client.roomCode;
+    if (!roomCode) return;
+    const game = this.gameStore.getGame(roomCode);
     if (!game) return;
 
     const battle = game.battle;
@@ -1519,34 +1674,24 @@ export class GameGateway {
       variant: event.variant,
       targetId: event.targetId,
     });
-
     if (!battle.readyPlayerIds.includes(player.id)) {
       battle.readyPlayerIds.push(player.id);
     }
 
-    this.logger.debug(
-      `Queued action: player=${player.id} action=${event.action} ready=${battle.readyPlayerIds.length}/${expected.length}`,
-    );
-
     this.broadcastRoundState(game);
-    this.broadcastState();
+    this.broadcastState(roomCode);
 
     const allReady = expected.every((p) =>
       battle.readyPlayerIds!.includes(p.id),
     );
-
-    if (allReady && !this.resolvingRound) {
-      void this.resolveRound(game);
-    }
+    if (allReady && !this.resolvingRound) void this.resolveRound(game);
   }
 
-  private async resolveRound(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-  ) {
+  private async resolveRound(game: GameState) {
     const battle = game.battle;
     if (!battle || battle.status !== 'active') return;
 
-    this.clearRoundTimeout();
+    this.clearRoundTimeout(game.roomCode);
     this.resolvingRound = true;
 
     try {
@@ -1557,17 +1702,13 @@ export class GameGateway {
 
       for (const p of expected) {
         if (queued.has(p.id)) continue;
-        battle.queuedActions!.push({
-          playerId: p.id,
-          action: 'attack',
-        });
-        this.logger.debug(`Auto-queued attack for ${p.id}`);
+        battle.queuedActions!.push({ playerId: p.id, action: 'attack' });
       }
 
       const queue = [...(battle.queuedActions ?? [])];
 
       for (const entry of queue) {
-        const live = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+        const live = this.gameStore.getGame(game.roomCode);
         if (!live?.battle || live.battle.status !== 'active') break;
 
         const liveBattle = live.battle;
@@ -1575,7 +1716,6 @@ export class GameGateway {
         if (!actor || actor.status !== 'alive') continue;
 
         const before = liveBattle.log.length;
-
         try {
           this.combatEngine.performAction(
             live,
@@ -1587,7 +1727,7 @@ export class GameGateway {
 
           const newLines = liveBattle.log.slice(before);
           for (const line of newLines) {
-            this.broadcastEvent(GLOBAL_ROOM, {
+            this.broadcastEvent(live.roomCode, {
               type: 'BATTLE_UPDATE',
               mode: liveBattle.mode,
               enemyName:
@@ -1601,30 +1741,22 @@ export class GameGateway {
               actingTeamId: actor.teamId,
               actingPlayerId: actor.id,
             });
-
-            if (line.endsWith('is BROKEN!')) {
-              this.emitBreak(line, live);
-            }
+            if (line.endsWith('is BROKEN!')) this.emitBreak(line, live);
           }
-
-          this.broadcastState();
-        } catch (error) {
-          this.logger.warn(
-            `Action failed: player=${entry.playerId} action=${entry.action} error=${error instanceof Error ? error.message : String(error)}`,
-          );
+          this.broadcastState(live.roomCode);
+        } catch (err) {
+          this.logger.warn(`Action failed: ${err}`);
         }
 
         if (liveBattle.status !== 'active') break;
-
         await this.wait(ACTION_RESOLVE_DELAY_MS);
       }
 
-      const live = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+      const live = this.gameStore.getGame(game.roomCode);
       if (!live?.battle) {
         this.resolvingRound = false;
         return;
       }
-
       const liveBattle = live.battle;
 
       if (liveBattle.status !== 'active') {
@@ -1633,21 +1765,19 @@ export class GameGateway {
       }
 
       if (liveBattle.mode === 'cpu') {
-        this.broadcastEvent(GLOBAL_ROOM, {
+        this.broadcastEvent(live.roomCode, {
           type: 'BATTLE_UPDATE',
           mode: 'cpu',
           message: '',
           thinking: true,
         });
-
         await this.wait(ENEMY_RETALIATE_DELAY_MS);
 
         const before = liveBattle.log.length;
         this.combatEngine.cpuRetaliate(live, liveBattle);
-
         const newCpuLines = liveBattle.log.slice(before);
         for (const line of newCpuLines) {
-          this.broadcastEvent(GLOBAL_ROOM, {
+          this.broadcastEvent(live.roomCode, {
             type: 'BATTLE_UPDATE',
             mode: 'cpu',
             enemyName: liveBattle.enemyName,
@@ -1656,13 +1786,9 @@ export class GameGateway {
             message: line,
             source: 'enemy',
           });
-
-          if (line.endsWith('is BROKEN!')) {
-            this.emitBreak(line, live);
-          }
+          if (line.endsWith('is BROKEN!')) this.emitBreak(line, live);
         }
-
-        this.broadcastEvent(GLOBAL_ROOM, {
+        this.broadcastEvent(live.roomCode, {
           type: 'BATTLE_UPDATE',
           mode: 'cpu',
           message: '',
@@ -1677,24 +1803,22 @@ export class GameGateway {
 
       liveBattle.queuedActions = [];
       liveBattle.readyPlayerIds = [];
-
       this.combatEngine.nextTurn(live);
       this.combatEngine.tickStatuses(live);
 
       this.broadcastRoundState(live);
-      this.broadcastState();
+      this.broadcastState(live.roomCode);
       this.broadcastRoomList();
-
       this.startRoundTimeout(live);
     } finally {
       this.resolvingRound = false;
     }
   }
 
-  private finishRound(game: NonNullable<ReturnType<GameStore['getGame']>>) {
+  private finishRound(game: GameState) {
     this.endBattleAndAdvance(game);
-    this.broadcastStory();
-    this.broadcastState();
+    this.broadcastStory(game.roomCode);
+    this.broadcastState(game.roomCode);
     this.broadcastRoomList();
   }
 
@@ -1731,7 +1855,7 @@ export class GameGateway {
       .flatMap((t) => t.players)
       .find((p) => p.name === name);
     if (broken) {
-      this.broadcastEvent(GLOBAL_ROOM, {
+      this.broadcastEvent(game.roomCode, {
         type: 'BREAK',
         teamId: broken.teamId,
         playerId: broken.id,
@@ -1739,18 +1863,64 @@ export class GameGateway {
     }
   }
 
-  private endBattleAndAdvance(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-  ) {
-    this.clearRoundTimeout();
+  private endBattleAndAdvance(game: GameState) {
+    this.clearRoundTimeout(game.roomCode);
 
     const battle = game.battle;
     if (battle) {
       const cutscene =
         battle.status === 'victory' ? battle.victory : battle.defeat;
-      this.playCutscene(cutscene, 'battle', false);
+      this.playCutscene(cutscene, 'battle', false, game.roomCode);
     }
 
+    // Battle modes loop instead of advancing the story.
+    if (game.battleMode === 'cpu') {
+      game.battle = undefined;
+      game.phase = 'battle';
+
+      setTimeout(() => {
+        const fresh = this.gameStore.getGame(game.roomCode);
+        if (!fresh || fresh.battleMode !== 'cpu') return;
+
+        const nextEnemy = this.pickRandomOpeningEnemy();
+        const config = ENEMY_CONFIGS[nextEnemy];
+        fresh.battle = this.combatEngine.createCpuBattle(
+          fresh,
+          fresh.currentTeamId,
+          nextEnemy,
+          config.hp,
+          config.hp,
+          {
+            attack: config.attack,
+            personality: config.personality,
+            abilityChance: config.abilityChance,
+            signatureEveryNRounds: config.signatureEveryNRounds,
+            signatureMultiplier: config.signatureMultiplier,
+            telegraphs: config.telegraphs,
+            phases: config.phases,
+            abilities: config.abilities,
+          },
+        );
+        if (fresh.battle) {
+          fresh.battle.queuedActions = [];
+          fresh.battle.readyPlayerIds = [];
+          fresh.battle.log.push(`${nextEnemy} emerges from the Highlands.`);
+        }
+        this.broadcastRoundState(fresh);
+        this.startRoundTimeout(fresh);
+        this.broadcastState(fresh.roomCode);
+      }, 4000);
+      return;
+    }
+
+    if (game.battleMode === 'pvp') {
+      game.battle = undefined;
+      game.phase = 'waiting';
+      this.broadcastState(game.roomCode);
+      return;
+    }
+
+    // Default: story mode continues as before.
     game.phase = 'story';
     game.battle = undefined;
 
@@ -1760,7 +1930,6 @@ export class GameGateway {
     }
 
     this.clampRotations(game);
-
     this.advanceActivePlayer(game);
   }
 
@@ -1772,6 +1941,7 @@ export class GameGateway {
     cutscene: Cutscene | undefined,
     context: 'story' | 'battle',
     pause = false,
+    roomCode?: string,
   ) {
     if (!cutscene || cutscene.lines.length === 0) return;
     if (this.seenCutscenes.has(cutscene.id)) return;
@@ -1779,7 +1949,7 @@ export class GameGateway {
 
     this.activeCutsceneId = pause ? cutscene.id : null;
 
-    this.broadcastEvent(GLOBAL_ROOM, {
+    this.broadcastEvent(roomCode ?? GLOBAL_ROOM, {
       type: 'CUTSCENE',
       cutscene,
       context,
@@ -1801,10 +1971,17 @@ export class GameGateway {
     return pool[(index + 1) % pool.length];
   }
 
-  private findPlayer(
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-    playerId: string,
-  ): Player | undefined {
+  private findGameByPlayer(playerId: string): GameState | undefined {
+    return this.gameStore
+      .getAllGames()
+      .find((g) =>
+        Object.values(g.teams).some((t) =>
+          t.players.some((p) => p.id === playerId),
+        ),
+      );
+  }
+
+  private findPlayer(game: GameState, playerId: string): Player | undefined {
     for (const team of Object.values(game.teams)) {
       const player = team.players.find((p) => p.id === playerId);
       if (player) return player;
@@ -1812,30 +1989,14 @@ export class GameGateway {
     return undefined;
   }
 
-  private getGlobalGame(client: ConnectedClient) {
-    if (!client.roomCode) {
-      this.sendError(client.socket, 'You are not inside the game.');
-      return undefined;
-    }
-
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
-
-    if (!game) {
-      this.sendError(client.socket, 'Game not found.');
-      return undefined;
-    }
-
-    return game;
-  }
-
-  private broadcastStory() {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+  private broadcastStory(roomCode: string) {
+    const game = this.gameStore.getGame(roomCode);
     if (!game) return;
 
     const node = this.storyEngine.getNode(game.currentNodeId);
     if (!node) return;
 
-    this.broadcastEvent(GLOBAL_ROOM, {
+    this.broadcastEvent(roomCode, {
       type: 'STORY_UPDATE',
       nodeId: node.id,
       title: node.title,
@@ -1846,28 +2007,25 @@ export class GameGateway {
 
     if (game.currentNodeId !== this.lastCutsceneNodeId) {
       this.lastCutsceneNodeId = game.currentNodeId;
-      this.playCutscene(node.onEnter, 'story', false);
+      this.playCutscene(node.onEnter, 'story', false, roomCode);
     }
   }
 
-  private broadcastState() {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+  private broadcastState(roomCode: string) {
+    const game = this.gameStore.getGame(roomCode);
     if (!game) return;
 
-    this.server.to(GLOBAL_ROOM).emit(
+    this.server.to(roomCode).emit(
       'message',
       JSON.stringify({
         type: 'STATE_SYNC',
-        roomCode: game.roomCode,
+        roomCode,
         payload: game as unknown as Record<string, unknown>,
       } satisfies GameEvent),
     );
   }
 
-  private sendState(
-    socket: Socket,
-    game: NonNullable<ReturnType<GameStore['getGame']>>,
-  ) {
+  private sendState(socket: Socket, game: GameState) {
     this.send(socket, {
       type: 'STATE_SYNC',
       roomCode: game.roomCode,
@@ -1877,16 +2035,12 @@ export class GameGateway {
 
   private broadcastEvent(roomCode: string, event: GameEvent) {
     this.recentEvents.push(event);
-    if (this.recentEvents.length > 60) {
-      this.recentEvents.shift();
-    }
+    if (this.recentEvents.length > 60) this.recentEvents.shift();
     this.server.to(roomCode).emit('message', JSON.stringify(event));
   }
 
   private send(socket: Socket, event: GameEvent) {
-    if (socket.connected) {
-      socket.send(JSON.stringify(event));
-    }
+    if (socket.connected) socket.send(JSON.stringify(event));
   }
 
   private sendError(socket: Socket, message: string) {
@@ -1918,30 +2072,30 @@ export class GameGateway {
       }
     }
 
-    // Also push the roster to admin viewers.
     this.broadcastPlayerList();
   }
 
   private handleCreditsDone(client: ConnectedClient) {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+    const roomCode = client.roomCode;
+    if (!roomCode) return;
+    const game = this.gameStore.getGame(roomCode);
     if (!game) return;
 
     game.phase = 'waiting';
     game.currentNodeId = 'start';
     game.creditsStartedAt = undefined;
     game.creditsDurationMs = undefined;
-
     game.playerRotation = {};
     game.lastActivePlayerId = undefined;
 
-    this.broadcastState();
+    this.broadcastState(roomCode);
   }
 
-  private restartGame() {
-    const game = this.gameStore.getGame(GLOBAL_ROOM_CODE);
+  private restartGame(roomCode: string) {
+    const game = this.gameStore.getGame(roomCode);
     if (!game) return;
 
-    this.logger.log('Restarting the Highlands');
+    this.logger.log(`Restarting the Highlands: ${roomCode}`);
 
     for (const teamId of Object.keys(game.teams) as TeamId[]) {
       const team = game.teams[teamId];
@@ -1958,7 +2112,6 @@ export class GameGateway {
 
     game.playerRotation = {};
     game.lastActivePlayerId = undefined;
-
     game.phase = 'waiting';
     game.currentNodeId = 'start';
     game.currentTeamId = 'ravens';
@@ -1973,8 +2126,8 @@ export class GameGateway {
     this.lastCutsceneNodeId = null;
     this.activeCutsceneId = null;
 
-    this.broadcastStory();
-    this.broadcastState();
+    this.broadcastStory(roomCode);
+    this.broadcastState(roomCode);
     this.broadcastRoomList();
     this.broadcastPlayerList();
   }
