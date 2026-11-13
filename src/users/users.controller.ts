@@ -52,8 +52,8 @@ export class UsersController {
     return this.userService.saveUserScore(info.userId, info.score);
   }
   @Post('/api/login-admin')
-  loginAdmin(@Body() password: string) {
-    return this.userService.logInAdmin(password);
+  loginAdmin(@Body() body: { password?: unknown }) {
+    return this.userService.logInAdmin(body);
   }
 
   @Post('/api/update-code')

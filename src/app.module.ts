@@ -15,6 +15,7 @@ import { MiscModule } from './misc/misc.module';
 import { ChatModule } from './chat/chat.module';
 import { JwtModule } from '@nestjs/jwt';
 import { GameModule } from './game/game.module';
+import { VotingModule } from './voting/voting.module';
 
 @Module({
   imports: [
@@ -48,7 +49,7 @@ import { GameModule } from './game/game.module';
         // password: config.get<string>('DB_PASSWORD'),
         // database: config.get<string>('DB_NAME'),
         autoLoadEntities: true,
-        synchronize: process.env.NODE_ENV !== 'production',
+        synchronize: false,
         ssl: { rejectUnauthorized: false },
       }),
     }),
@@ -63,6 +64,7 @@ import { GameModule } from './game/game.module';
     MiscModule,
     ChatModule,
     GameModule,
+    VotingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

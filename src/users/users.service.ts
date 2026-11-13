@@ -192,7 +192,7 @@ export class UsersService {
     };
   }
 
-  async logInAdmin(password: string): Promise<NetResponse> {
+  async logInAdmin(password: { password?: unknown }): Promise<NetResponse> {
     if (password['password'] == 'zelink123') {
       const payload = {
         name: 'Nicholas Johnson',
