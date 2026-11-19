@@ -122,7 +122,7 @@ export function toMajor(minor: string | number): string {
 export class FlutterwaveService {
   private readonly logger = new Logger(FlutterwaveService.name);
   constructor(private readonly config: VotingConfig) {}
-  private mode() {
+  mode() {
     const secret = this.config.required('FLUTTERWAVE_SECRET_KEY');
     const mode = secret.startsWith('FLWSECK_TEST-')
       ? 'test'
@@ -174,17 +174,34 @@ export class FlutterwaveService {
       );
   }
   async initialize(p: PurchaseRecord) {
+    return this.initializeHosted({
+      reference: p.provider_reference,
+      amount: p.amount,
+      email: p.email,
+      redirectUrl: `${this.config.frontend()}/pages/votes/payment?purchaseId=${p.id}`,
+      title: 'Vote purchase',
+      expiresAt: p.expires_at,
+    });
+  }
+  async initializeHosted(checkout: {
+    reference: string;
+    amount: number | string;
+    email: string;
+    redirectUrl: string;
+    title: string;
+    expiresAt: Date | string;
+  }) {
     const response = await this.request<{ link: string }>('/payments', {
-      tx_ref: p.provider_reference,
-      amount: toMajor(p.amount),
+      tx_ref: checkout.reference,
+      amount: toMajor(checkout.amount),
       currency: 'NGN',
-      redirect_url: `${this.config.frontend()}/pages/votes/payment?purchaseId=${p.id}`,
-      customer: { email: p.email },
-      customizations: { title: 'Vote purchase' },
+      redirect_url: checkout.redirectUrl,
+      customer: { email: checkout.email },
+      customizations: { title: checkout.title },
       configurations: {
         session_duration: Math.max(
           1,
-          Math.ceil((new Date(p.expires_at).getTime() - Date.now()) / 60000),
+          Math.ceil((new Date(checkout.expiresAt).getTime() - Date.now()) / 60000),
         ),
         max_retry_attempt: 3,
       },

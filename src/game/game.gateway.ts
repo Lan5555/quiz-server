@@ -1,7 +1,15 @@
+import type { EncounterPath, EncounterPathChoice } from './game.types';
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { QueryFailedError } from 'typeorm';
 
 import {
   Battle,
@@ -10,6 +18,8 @@ import {
   GameState,
   Player,
   QueuedAction,
+  ROOM_ARENAS,
+  ROOM_FIGHTERS,
   StoryChoice,
   TeamId,
 } from './game.types';
@@ -17,25 +27,52 @@ import { GameStore, GLOBAL_ROOM_CODE } from './game.store';
 import { StoryEngine } from './engines/story.engine';
 import { CombatEngine } from './engines/combat.engine';
 import type { AdminPlayerSummary, CpuAbilityId, CpuPhase } from './game.types';
+import { GameAccountsService } from './accounts/game-accounts.service';
+import { applyAdventureInteraction, createAdventureQuest } from './engines/adventure-quests';
+import { createEncounterPath, encounterOpponents } from './engines/encounter-path';
+import { ProgressionService } from './progression/progression.service';
+import { isPremiumFighter, type Loadout } from './progression/catalog';
 
 interface ConnectedClient {
   socket: Socket;
   playerId?: string;
   roomCode?: string;
   watcher?: boolean;
+  moderator?: boolean;
 }
 
+const MODERATOR_EVENTS = new Set([
+  'ADMIN_APPROVE_ROOM',
+  'ADMIN_GET_ROOMS',
+  'ADMIN_KICK_PLAYER',
+  'TEAM_TURN',
+  'ELIMINATE',
+]);
 const GLOBAL_ROOM = 'global';
 const ALL_TEAMS: TeamId[] = ['ravens', 'wolves', 'dragons', 'serpents'];
 
 const ACTION_RESOLVE_DELAY_MS = 900;
+const LIMIT_BREAK_RESOLVE_DELAY_MS = 2000;
 const ENEMY_RETALIATE_DELAY_MS = 1200;
 const ROUND_DECISION_TIMEOUT_MS = 30_000;
 const STORY_DECISION_TIMEOUT_MS = 70_000;
 
+const MAX_ENCOUNTER_TIER = 61;
 const DEFAULT_TEAM_CAP = 4;
 const MIN_TEAM_CAP = 1;
 const MAX_TEAM_CAP = 10;
+const DEFAULT_HP = 2000;
+const validHp = (hp: unknown): hp is number =>
+  typeof hp === 'number' && Number.isInteger(hp) && hp >= 250 && hp <= 10000;
+
+export interface RoomControl {
+  action: string;
+  playerId?: string;
+  teamId?: TeamId;
+  nodeId?: string;
+  choiceId?: string;
+  value?: number;
+}
 
 interface EnemyConfig {
   hp: number;
@@ -206,16 +243,355 @@ export class GameGateway {
     private readonly gameStore: GameStore,
     private readonly storyEngine: StoryEngine,
     private readonly combatEngine: CombatEngine,
+    private readonly accounts: GameAccountsService,
+    private readonly progression: ProgressionService,
   ) {}
 
-  private recentEvents: GameEvent[] = [];
   private activeCutsceneId: string | null = null;
   private seenCutscenes = new Set<string>();
   private lastCutsceneNodeId: string | null = null;
 
-  private resolvingRound = false;
+  private readonly resolvingRooms = new Set<string>();
+  private readonly contributors = new WeakMap<Battle, Set<string>>();
+  private readonly kickedPlayers = new WeakMap<GameState, Set<string>>();
   private roundTimeoutHandles = new Map<string, NodeJS.Timeout>();
   private storyTimeoutHandles = new Map<string, NodeJS.Timeout>();
+  private readonly roomTransitionTimers = new Map<string, NodeJS.Timeout>();
+
+  adminState() {
+    return this.gameStore.getAllGames().map((room) => {
+      const {
+        roomCode,
+        phase,
+        paused,
+        battleMode,
+        adventure,
+        encounterPath,
+        currentTeamId,
+        activePlayerId,
+        teamCap,
+        startingHp,
+        teams,
+        hostPlayerId,
+        battle,
+      } = room;
+      const scene = room.battleMode
+        ? undefined
+        : this.storyEngine.getNode(room.currentNodeId, room);
+      return {
+        roomCode,
+        phase,
+        paused,
+        battleMode,
+        adventure,
+        encounterPath,
+        currentTeamId,
+        activePlayerId,
+        teamCap,
+        startingHp,
+        teams,
+        hostPlayerId,
+        battle: battle && { ...battle, log: battle.log.slice(-10) },
+        resolving: this.resolvingRooms.has(roomCode),
+        scene: scene && {
+          id: scene.id,
+          title: scene.title,
+          choices: scene.choices.map(({ id, text, result }) => ({
+            id,
+            text,
+            result,
+          })),
+        },
+        scenes: room.battleMode
+          ? []
+          : Object.values(this.storyEngine.getStory(room)).map(
+              ({ id, title }) => ({ id, title }),
+            ),
+      };
+    });
+  }
+
+  storyPublished() {
+    for (const game of this.gameStore.getAllGames()) {
+      if (!game.battleMode && game.phase === 'waiting') {
+        this.storyEngine.resetRun(game);
+        this.broadcastStory(game.roomCode);
+        this.broadcastState(game.roomCode);
+      }
+    }
+  }
+
+  refreshAccount(playerId: string) {
+    for (const game of this.gameStore.getAllGames()) {
+      if (this.findPlayer(game, playerId)) {
+        this.broadcastEvent(game.roomCode, { type: 'PROFILE_UPDATED' });
+      }
+    }
+  }
+
+  controlRoom(roomCode: string, command: RoomControl) {
+    const game = this.gameStore.getGame(roomCode);
+    if (!game) throw new NotFoundException('Room not found.');
+    if (this.resolvingRooms.has(roomCode))
+      throw new ConflictException('Wait for the current round to finish.');
+    const { action, playerId, teamId, nodeId, choiceId, value } = command;
+    const player = playerId ? this.findPlayer(game, playerId) : undefined;
+    const integer = (min: number, max: number) => {
+      if (
+        typeof value !== 'number' ||
+        !Number.isInteger(value) ||
+        value < min ||
+        value > max
+      )
+        throw new BadRequestException(
+          `Enter a whole number from ${min} to ${max}.`,
+        );
+      return value;
+    };
+    switch (action) {
+      case 'start':
+        if (game.phase !== 'waiting')
+          throw new ConflictException('Start is available in the lobby.');
+        if (game.battleMode === 'pvp') this.startPvp(game);
+        else if (game.battleMode === 'cpu') {
+          if (game.openingEnemy || game.encounterPath) {
+            this.startStagedCpuMatch(game);
+            break;
+          }
+          if (
+            !game.teams[game.currentTeamId].players.some(
+              (entry) => entry.connected,
+            )
+          )
+            throw new ConflictException('The arena needs a connected player.');
+          game.phase = 'battle';
+          this.scheduleCpuEncounter(game, 0);
+        } else this.activateStory(game);
+        break;
+      case 'pause':
+        if (game.paused || (game.phase !== 'story' && game.phase !== 'battle'))
+          throw new ConflictException(
+            'Only a running story or match can be paused.',
+          );
+        game.paused = true;
+        this.clearRoomTimers(roomCode);
+        break;
+      case 'resume':
+        if (!game.paused)
+          throw new ConflictException('This room is already running.');
+        game.paused = false;
+        if (game.phase === 'story') this.startStoryTimeout(game);
+        else if (game.battle?.status === 'active') this.startRoundTimeout(game);
+        else if (game.battleMode === 'cpu' && !game.battle && !game.encounterPath)
+          this.scheduleCpuEncounter(game);
+        break;
+      case 'restart':
+        this.restartGame(roomCode);
+        return;
+      case 'end':
+        this.clearRoomTimers(roomCode);
+        game.phase = 'ended';
+        game.paused = false;
+        game.battle = undefined;
+        game.pendingNextNodeId = undefined;
+        if (roomCode === GLOBAL_ROOM_CODE) this.activeCutsceneId = null;
+        break;
+      case 'room_hp':
+        if (game.phase !== 'waiting')
+          throw new ConflictException('Set room HP in the lobby.');
+        game.startingHp = integer(250, 10000);
+        for (const member of Object.values(game.teams).flatMap(
+          (team) => team.players,
+        )) {
+          member.hp = member.maxHp = game.startingHp;
+        }
+        break;
+      case 'capacity':
+        if (game.phase !== 'waiting')
+          throw new ConflictException('Set team capacity in the lobby.');
+        game.teamCap = integer(1, 10);
+        for (const id of ALL_TEAMS) {
+          game.teamCaps = { ...game.teamCaps, [id]: game.teamCap };
+        }
+        break;
+      case 'scene':
+        if (
+          game.battleMode ||
+          game.phase !== 'story' ||
+          !nodeId ||
+          !this.storyEngine.getNode(nodeId, game)
+        )
+          throw new ConflictException('Choose a scene in the running story.');
+        game.currentNodeId = nodeId;
+        game.pendingNextNodeId = undefined;
+        this.lastCutsceneNodeId = null;
+        this.activeCutsceneId = null;
+        this.startStoryTimeout(game);
+        break;
+      case 'choice':
+        if (game.phase !== 'story' || game.paused || !choiceId)
+          throw new ConflictException(
+            'Resume the story before playing a choice.',
+          );
+        this.resolveStoryChoice(game, choiceId);
+        return;
+      case 'turn': {
+        if (game.phase !== 'story' || !teamId || !ALL_TEAMS.includes(teamId))
+          throw new ConflictException('Choose a team in the running story.');
+        const actor = game.teams[teamId].players.find(
+          (entry) =>
+            entry.status === 'alive' &&
+            entry.connected &&
+            (!playerId || entry.id === playerId),
+        );
+        if (!actor)
+          throw new ConflictException(
+            'That team has no eligible player for this turn.',
+          );
+        game.currentTeamId = teamId;
+        game.activePlayerId = game.lastActivePlayerId = actor.id;
+        game.playerRotation = {
+          ...game.playerRotation,
+          [teamId]: game.teams[teamId].players
+            .filter((entry) => entry.status === 'alive')
+            .indexOf(actor),
+        };
+        this.broadcastEvent(roomCode, {
+          type: 'TEAM_TURN',
+          teamId,
+          activePlayerId: actor.id,
+        });
+        this.startStoryTimeout(game);
+        break;
+      }
+      case 'round':
+        if (game.paused || game.battle?.status !== 'active')
+          throw new ConflictException('Resume an active battle first.');
+        void this.resolveRound(game).catch(() =>
+          this.logger.error(`Could not resolve round in ${roomCode}`),
+        );
+        return;
+      case 'enemy_hp':
+        if (game.battle?.mode !== 'cpu' || game.battle.status !== 'active')
+          throw new ConflictException('This room has no active CPU opponent.');
+        game.battle.enemyHp = integer(1, game.battle.enemyMaxHp);
+        if (game.battle.enemyUnits) {
+          let remaining = game.battle.enemyHp;
+          let capacity = game.battle.enemyMaxHp;
+          for (const unit of game.battle.enemyUnits) {
+            unit.enemyHp = Math.ceil(remaining * unit.enemyMaxHp / capacity);
+            remaining -= unit.enemyHp;
+            capacity -= unit.enemyMaxHp;
+          }
+        }
+        break;
+      case 'victory':
+      case 'defeat':
+        if (game.battle?.status !== 'active')
+          throw new ConflictException('This room has no active battle.');
+        game.paused = false;
+        game.battle.status = action;
+        this.broadcastEvent(roomCode, {
+          type: 'BATTLE_UPDATE',
+          mode: game.battle.mode,
+          source: 'system',
+          message: `A moderator ended the battle with a ${action}.`,
+        });
+        this.broadcastState(roomCode);
+        this.endBattleAndAdvance(game);
+        break;
+      case 'hp':
+      case 'max_hp':
+      case 'revive':
+      case 'eliminate':
+      case 'kick':
+      case 'move_team':
+        if (!player)
+          throw new NotFoundException('Choose a player in this room.');
+        if (action === 'kick') {
+          this.moderatorKick(game, player);
+        } else if (action === 'move_team') {
+          if (
+            game.phase !== 'waiting' ||
+            !teamId ||
+            !ALL_TEAMS.includes(teamId)
+          )
+            throw new ConflictException(
+              'Players can change teams in the lobby.',
+            );
+          if (player.teamId !== teamId) {
+            const cap =
+              game.teamCaps?.[teamId] ?? game.teamCap ?? DEFAULT_TEAM_CAP;
+            const active = ALL_TEAMS.filter(
+              (id) =>
+                id !== player.teamId &&
+                game.teams[id].players.some((entry) => entry.connected),
+            );
+            const oldTeamStays = game.teams[player.teamId].players.some(
+              (entry) => entry.id !== player.id && entry.connected,
+            );
+            if (
+              game.battleMode === 'pvp' &&
+              !active.includes(teamId) &&
+              active.length + Number(oldTeamStays) >= 2
+            )
+              throw new ConflictException('PvP is limited to two teams.');
+            if (
+              game.teams[teamId].players.filter((entry) => entry.connected)
+                .length >= cap
+            )
+              throw new ConflictException('The target team is at capacity.');
+            game.teams[player.teamId].players = game.teams[
+              player.teamId
+            ].players.filter((entry) => entry.id !== player.id);
+            player.teamId = teamId;
+            player.ready = false;
+            game.teams[teamId].players.push(player);
+            if (game.battleMode === 'cpu') game.currentTeamId = teamId;
+          }
+        } else if (action === 'eliminate') {
+          player.hp = 0;
+          player.status = 'eliminated';
+          this.broadcastEvent(roomCode, {
+            type: 'ELIMINATE',
+            playerId: player.id,
+          });
+        } else if (action === 'max_hp') {
+          player.maxHp = integer(250, 10000);
+          player.hp = Math.min(player.hp, player.maxHp);
+        } else {
+          if (action === 'hp' && player.status !== 'alive')
+            throw new ConflictException(
+              'Revive this player before setting current HP.',
+            );
+          player.hp =
+            action === 'revive' ? player.maxHp : integer(1, player.maxHp);
+          if (action === 'revive') {
+            player.status = 'alive';
+            player.breakMeter = 0;
+            player.statusEffects = [];
+          }
+        }
+        this.clampRotations(game);
+        if (game.phase === 'story' && game.activePlayerId) {
+          const active = this.findPlayer(game, game.activePlayerId);
+          if (!active?.connected || active.status !== 'alive')
+            this.advanceActivePlayer(game);
+        }
+        if (game.battle?.status === 'active') {
+          this.combatEngine.reconcileRoster(game);
+          if (game.battle.status === 'active') this.broadcastRoundState(game);
+          else this.endBattleAndAdvance(game);
+        }
+        break;
+      default:
+        throw new BadRequestException('Unknown room command.');
+    }
+    if (!game.battleMode) this.broadcastStory(roomCode);
+    this.broadcastState(roomCode);
+    this.broadcastRoomList();
+    this.broadcastPlayerList();
+  }
 
   /* ================================================================== */
   /* Connection                                                          */
@@ -232,7 +608,17 @@ export class GameGateway {
       message: 'Connected to Embrace Your Horror.',
     });
 
-    socket.on('message', (data) => this.handleMessage(client, data));
+    let pending = Promise.resolve();
+    let outstanding = 0;
+    socket.on('message', (data: unknown) => {
+      if (outstanding >= 12) return;
+      outstanding++;
+      pending = pending
+        .then(() => this.handleMessage(client, data))
+        .finally(() => {
+          outstanding--;
+        });
+    });
 
     socket.on('disconnect', (reason) => {
       this.clients.delete(client);
@@ -247,8 +633,11 @@ export class GameGateway {
   /* Message plumbing                                                    */
   /* ================================================================== */
 
-  private handleMessage(client: ConnectedClient, rawData: unknown) {
+  private async handleMessage(client: ConnectedClient, rawData: unknown) {
+    let eventType = 'UNKNOWN';
+    let stage = 'decode_message';
     try {
+      if (!client.socket.connected) return;
       const raw =
         typeof rawData === 'string'
           ? rawData
@@ -263,33 +652,158 @@ export class GameGateway {
               : String(rawData);
 
       const event = JSON.parse(raw) as GameEvent;
+      if (
+        !event ||
+        typeof event !== 'object' ||
+        typeof event.type !== 'string'
+      ) {
+        throw new BadRequestException('Invalid game message.');
+      }
+      if (/^[A-Z_]{1,40}$/.test(event.type)) eventType = event.type;
 
       this.logger.debug(
-        `Received ${event.type}: socket=${client.socket.id} room=${client.roomCode ?? 'none'}`,
+        `Received ${eventType}: socket=${client.socket.id} room=${client.roomCode ?? 'none'}`,
       );
-      this.handleEvent(client, event);
+      if (event.type === 'WATCH_GAME' || event.type === 'LEAVE_ROOM') {
+        stage = 'apply_room_event';
+        return this.handleEvent(client, event);
+      }
+      stage = 'authorize_game_session';
+      const identity = await this.accounts.requireSession(
+        client.socket.handshake.auth.gameToken,
+      );
+      if (!client.socket.connected) return;
+      client.moderator = identity.moderator;
+      if (MODERATOR_EVENTS.has(event.type) && !identity.moderator) {
+        return this.sendError(
+          client.socket,
+          'Game moderator access is required.',
+        );
+      }
+
+      if (
+        event.type === 'CREATE_ROOM' ||
+        event.type === 'JOIN_GAME' ||
+        event.type === 'REFRESH_LOADOUT'
+      ) {
+        stage = 'load_room_loadout';
+        const loadout = await this.progression.roomLoadout(identity.id);
+        if (!client.socket.connected) return;
+        event.playerId = identity.id;
+        if (event.type !== 'REFRESH_LOADOUT') {
+          if (!ALL_TEAMS.includes(event.teamId))
+            return this.sendError(client.socket, 'Choose a valid team.');
+          event.playerName = identity.username;
+        }
+        stage = 'apply_room_event';
+        return await this.handleEvent(client, event, loadout);
+      }
+
+      if (
+        !MODERATOR_EVENTS.has(event.type) &&
+        (client.watcher ||
+          client.playerId !== identity.id ||
+          ('playerId' in event && event.playerId !== identity.id))
+      ) {
+        return this.sendError(
+          client.socket,
+          'Join the room as your own player first.',
+        );
+      }
+      if (event.type === 'SELECT_FIGHTER') {
+        stage = 'select_fighter';
+        await this.selectFighter(client, event);
+        return;
+      }
+      stage = 'apply_room_event';
+      await this.handleEvent(client, event);
     } catch (error) {
-      this.logger.warn(
-        `Invalid message: socket=${client.socket.id} error=${error instanceof Error ? error.message : String(error)}`,
+      if (error instanceof HttpException && error.getStatus() < 500) {
+        return this.sendError(client.socket, error.message);
+      }
+      if (stage === 'decode_message' && error instanceof SyntaxError) {
+        return this.sendError(client.socket, 'Invalid game message.');
+      }
+      const driver: unknown =
+        error instanceof QueryFailedError ? error.driverError : error;
+      const code =
+        driver && typeof driver === 'object' && 'code' in driver
+          ? driver.code
+          : undefined;
+      const sqlState =
+        typeof code === 'string' &&
+        /^[0-9A-Z]{5}$/.test(code) &&
+        (error instanceof QueryFailedError ||
+          (driver && typeof driver === 'object' && 'severity' in driver))
+          ? code
+          : undefined;
+      const reason = sqlState
+        ? `database_error SQLSTATE=${sqlState}`
+        : error instanceof TypeError
+          ? 'type_error'
+          : 'unexpected_error';
+      this.logger.error(
+        `Game event failed: event=${eventType} stage=${stage} socket=${client.socket.id} ${reason}`,
       );
-      this.sendError(client.socket, 'Invalid WebSocket message.');
+      const schemaMissing = sqlState === '42703' || sqlState === '42P01';
+      this.sendError(
+        client.socket,
+        schemaMissing
+          ? 'The game database needs an update. Contact the game administrator.'
+          : 'Could not process the game message. Try again shortly.',
+      );
     }
   }
 
-  private handleEvent(client: ConnectedClient, event: GameEvent) {
+  private handleEvent(
+    client: ConnectedClient,
+    event: GameEvent,
+    loadout?: Loadout,
+  ) {
     switch (event.type) {
       case 'CREATE_ROOM':
-        this.createRoom(client, event);
-        break;
+        return this.createRoom(client, event, loadout!);
       case 'JOIN_GAME':
-        this.joinGame(client, event);
+        this.joinGame(client, event, loadout!);
         break;
+      case 'ADVENTURE_INTERACT':
+        this.adventureInteract(client, event);
+        break;
+      case 'BEGIN_ADVENTURE':
+        this.beginAdventure(client);
+        break;
+      case 'START_CPU':
+        return this.startCpuMatch(client, event.pathChoice);
       case 'START_PVP':
         this.startPvpMatch(client, event);
         break;
       case 'SET_TEAM_CAP':
         this.setTeamCap(client, event);
         break;
+      case 'SET_STARTING_HP':
+        this.setStartingHp(client, event);
+        break;
+      case 'REFRESH_LOADOUT': {
+        const game = client.roomCode && this.gameStore.getGame(client.roomCode);
+        if (
+          !game ||
+          client.watcher ||
+          client.playerId !== event.playerId ||
+          game.phase !== 'waiting'
+        ) {
+          return this.sendError(
+            client.socket,
+            'You can change your room loadout while waiting.',
+          );
+        }
+        const player = this.findPlayer(game, event.playerId);
+        if (player) {
+          player.loadout = loadout;
+          player.ready = false;
+        }
+        this.broadcastState(game.roomCode);
+        break;
+      }
       case 'WATCH_GAME':
         this.watchGame(client, event);
         break;
@@ -306,7 +820,7 @@ export class GameGateway {
         this.handleCombatQueueAction(client, event);
         break;
       case 'ROOM_PLAYER_READY':
-        this.playerReady(client, event.playerId);
+        this.playerReady(client, event.playerId, event.ready !== false);
         break;
       case 'TEAM_TURN':
         this.changeTeamTurn(client, event.teamId);
@@ -318,16 +832,8 @@ export class GameGateway {
         this.approveRoom(client, event);
         break;
       case 'ADMIN_GET_ROOMS':
-        client.watcher = true;
         this.sendRoomList(client.socket);
         this.sendPlayerList(client.socket);
-        break;
-      case 'STORY_UPDATE':
-        if (!client.roomCode) {
-          this.sendError(client.socket, 'You are not inside a game.');
-          return;
-        }
-        this.broadcastEvent(client.roomCode, event);
         break;
       case 'LEAVE_ROOM':
         this.removeFromRoom(client);
@@ -336,7 +842,10 @@ export class GameGateway {
         this.leaveGame(client, event);
         break;
       case 'CUTSCENE_DONE':
-        if (event.cutsceneId === this.activeCutsceneId) {
+        if (
+          client.roomCode === GLOBAL_ROOM &&
+          event.cutsceneId === this.activeCutsceneId
+        ) {
           this.activeCutsceneId = null;
         }
         break;
@@ -355,10 +864,56 @@ export class GameGateway {
   /* Room creation                                                       */
   /* ================================================================== */
 
-  private createRoom(
+  private async createRoom(
     client: ConnectedClient,
     event: Extract<GameEvent, { type: 'CREATE_ROOM' }>,
+    loadout: Loadout,
   ) {
+    if (event.battleMode !== 'pvp' && event.battleMode !== 'cpu') {
+      return this.sendError(client.socket, 'Choose an arena mode.');
+    }
+    if (event.adventure !== undefined &&
+        (typeof event.adventure !== 'boolean' || (event.adventure && (event.battleMode !== 'cpu' || event.enemyName !== undefined)))) {
+      return this.sendError(client.socket, 'Adventure requires a solo encounter path.');
+    }
+    let arenaId = event.arenaId;
+    let startingHp = event.startingHp;
+    // A cached HP-only lobby can pass HP as the newer page's arena argument.
+    if (
+      event.battleMode === 'pvp' &&
+      startingHp === undefined &&
+      validHp(arenaId)
+    ) {
+      startingHp = arenaId;
+      arenaId = ROOM_ARENAS[0];
+      this.logger.debug(
+        `CREATE_ROOM recovered starting HP from arenaId: socket=${client.socket.id}`,
+      );
+    }
+    if (arenaId !== undefined && !ROOM_ARENAS.includes(arenaId)) {
+      this.logger.warn(
+        `CREATE_ROOM rejected: socket=${client.socket.id} arenaIdType=${arenaId === null ? 'null' : typeof arenaId}`,
+      );
+      return this.sendError(client.socket, 'Choose an available arena.');
+    }
+    if (startingHp !== undefined && !validHp(startingHp)) {
+      return this.sendError(
+        client.socket,
+        'Starting HP must be a whole number from 250 to 10,000.',
+      );
+    }
+    if (
+      event.enemyName !== undefined &&
+      (typeof event.enemyName !== 'string' ||
+        !Object.hasOwn(ENEMY_CONFIGS, event.enemyName))
+    ) {
+      return this.sendError(client.socket, 'Choose an available opponent.');
+    }
+    const checkpointPath = event.battleMode === 'cpu' && !event.adventure && event.enemyName === undefined
+      ? await this.resumePath(event.playerId)
+      : undefined;
+    if (!client.socket.connected) return;
+    this.removeFromRoom(client);
     const roomCode = this.generateRoomCode();
     const game = this.gameStore.createRoom(roomCode);
 
@@ -372,13 +927,18 @@ export class GameGateway {
     client.playerId = event.playerId;
     void client.socket.join(roomCode);
 
+    const hp =
+      event.battleMode === 'pvp'
+        ? (startingHp ?? DEFAULT_HP)
+        : DEFAULT_HP;
     const team = game.teams[event.teamId];
     team.players.push({
       id: event.playerId,
       name: (event.playerName ?? 'Player').trim() || 'Player',
       teamId: event.teamId,
-      hp: 2000,
-      maxHp: 2000,
+      hp,
+      maxHp: hp,
+      loadout,
       status: 'alive',
       ready: false,
       connected: true,
@@ -387,6 +947,7 @@ export class GameGateway {
     });
 
     game.battleMode = event.battleMode;
+    game.arenaId = arenaId;
     game.hostPlayerId = event.playerId;
     game.activeTeams = [event.teamId];
     game.currentTeamId = event.teamId;
@@ -395,40 +956,25 @@ export class GameGateway {
     game.lastActivePlayerId = event.playerId;
 
     if (event.battleMode === 'cpu') {
-      const enemyName = event.enemyName ?? this.pickRandomOpeningEnemy();
-      const config = ENEMY_CONFIGS[enemyName];
-
-      game.phase = 'battle';
-      game.battle = this.combatEngine.createCpuBattle(
-        game,
-        event.teamId,
-        enemyName,
-        config?.hp ?? 1200,
-        config?.hp ?? 1200,
-        {
-          attack: config?.attack ?? 100,
-          personality: config?.personality ?? 'aggressive',
-          abilityChance: config?.abilityChance ?? 0.35,
-          signatureEveryNRounds: config?.signatureEveryNRounds ?? 4,
-          signatureMultiplier: config?.signatureMultiplier ?? 1.6,
-          telegraphs: config?.telegraphs,
-          phases: config?.phases,
-          abilities: config?.abilities,
-        },
-      );
-
-      if (game.battle) {
-        game.battle.queuedActions = [];
-        game.battle.readyPlayerIds = [];
-        game.battle.log.push(`${enemyName} emerges from the Highlands.`);
+      if (!event.enemyName) {
+        game.encounterPath = checkpointPath ?? createEncounterPath(event.adventure);
+        if (event.adventure) {
+          game.adventure = true;
+          game.adventureQuest = createAdventureQuest();
+        }
+        game.openingEnemy = game.encounterPath.levels[game.encounterPath.index].name;
+        game.arenaId ??= ROOM_ARENAS[0];
+        game.phase = 'waiting';
+      } else if (game.arenaId) {
+        game.openingEnemy = event.enemyName;
+        game.phase = 'waiting';
+      } else {
+        this.startCpuBattle(game, event.enemyName);
       }
-
-      this.broadcastRoundState(game);
-      this.startRoundTimeout(game);
     } else {
-      // PvP: wait for the host to click Start.
       game.phase = 'waiting';
       game.teamCap = DEFAULT_TEAM_CAP;
+      game.startingHp = hp;
     }
 
     this.send(client.socket, {
@@ -439,6 +985,225 @@ export class GameGateway {
     });
 
     this.sendState(client.socket, game);
+    this.broadcastRoomList();
+  }
+
+  private async selectFighter(
+    client: ConnectedClient,
+    event: Extract<GameEvent, { type: 'SELECT_FIGHTER' }>,
+  ) {
+    const game = client.roomCode && this.gameStore.getGame(client.roomCode);
+    const player = game ? this.findPlayer(game, event.playerId) : undefined;
+    if (
+      !game ||
+      !game.arenaId ||
+      game.phase !== 'waiting' ||
+      !player?.connected
+    ) {
+      return this.sendError(
+        client.socket,
+        'Fighters can be selected in the waiting room.',
+      );
+    }
+    if (!ROOM_FIGHTERS.includes(event.fighterId)) {
+      return this.sendError(client.socket, 'Choose an available fighter.');
+    }
+    if (isPremiumFighter(event.fighterId)) {
+      const { fighters } = await this.progression.profile(player.id);
+      if (
+        !client.socket.connected ||
+        client.roomCode !== game.roomCode ||
+        client.playerId !== player.id ||
+        this.gameStore.getGame(game.roomCode) !== game ||
+        game.phase !== 'waiting' ||
+        !player.connected
+      )
+        return;
+      if (!fighters.includes(event.fighterId)) {
+        return this.sendError(
+          client.socket,
+          'Unlock this fighter in the Cinder Forge first.',
+        );
+      }
+    }
+    if (player.fighterId !== event.fighterId) {
+      player.fighterId = event.fighterId;
+      player.ready = false;
+    }
+    this.broadcastState(game.roomCode);
+  }
+
+  private adventureInteract(
+    client: ConnectedClient,
+    event: Extract<GameEvent, { type: 'ADVENTURE_INTERACT' }>,
+  ) {
+    const game = client.roomCode && this.gameStore.getGame(client.roomCode);
+    if (!game || !game.adventure || game.paused || game.phase !== 'battle' ||
+        game.battle || client.playerId !== game.hostPlayerId ||
+        game.encounterPath?.status !== 'active' || event.chapter !== game.encounterPath.index) return;
+    const quest = applyAdventureInteraction(
+      event.chapter, game.adventureQuest ?? createAdventureQuest(), event.action, event.target,
+    );
+    if (quest && quest !== game.adventureQuest) {
+      game.adventureQuest = quest;
+      this.broadcastState(game.roomCode);
+    }
+  }
+
+  private beginAdventure(client: ConnectedClient) {
+    const game = client.roomCode && this.gameStore.getGame(client.roomCode);
+    if (
+      !game ||
+      !game.adventure ||
+      game.paused ||
+      game.phase !== 'waiting' ||
+      client.playerId !== game.hostPlayerId
+    ) {
+      return this.sendError(client.socket, 'Only the host can begin a waiting Adventure.');
+    }
+    this.startStagedCpuMatch(game);
+    this.broadcastState(game.roomCode);
+    this.broadcastRoomList();
+  }
+
+  private async resumePath(accountId: string): Promise<EncounterPath> {
+    const checkpoint = await this.progression.encounterCheckpoint(accountId);
+    if (!checkpoint) return createEncounterPath();
+    return {
+      index: checkpoint.cleared === 12 ? 11 : 6,
+      status: checkpoint.cleared === 12 ? 'cleared' : 'active',
+      levels: checkpoint.levels,
+      tier: checkpoint.tier,
+      savedWins: checkpoint.cleared,
+      nextTier: checkpoint.cleared === 12 && checkpoint.tier < MAX_ENCOUNTER_TIER ? checkpoint.tier + 1 : undefined,
+    };
+  }
+
+  private async choosePathDifficulty(game: GameState, path: EncounterPath, action: EncounterPathChoice) {
+    if (action === 'resume' ? path.status !== 'defeated' : path.status !== 'cleared') {
+      throw new ConflictException('Finish the current run before choosing a difficulty.');
+    }
+    if (action === 'higher' && !path.nextTier) throw new ConflictException('You have reached the highest difficulty.');
+
+    if (path.savePending && path.status === 'cleared') {
+      await this.savePathMilestone(game, path, 12);
+    }
+    if (game.phase !== 'ended' || game.encounterPath !== path) return;
+    if (action === 'save') {
+      this.broadcastState(game.roomCode);
+      return;
+    }
+
+    const next = action === 'resume'
+      ? await this.resumePath(game.hostPlayerId!)
+      : createEncounterPath(false, action === 'higher' ? path.nextTier : path.tier, path.levels[0].id);
+    if (game.phase !== 'ended' || game.encounterPath !== path) return;
+    if (action === 'replay') next.savedWins = path.savedWins;
+    game.encounterPath = next;
+    game.phase = next.status === 'cleared' ? 'ended' : 'battle';
+    game.openingEnemy = next.levels[next.index].name;
+    const host = this.findPlayer(game, game.hostPlayerId!);
+    if (host) {
+      host.hp = host.maxHp;
+      host.status = 'alive';
+      host.statusEffects = [];
+      host.breakMeter = 0;
+    }
+    this.broadcastState(game.roomCode);
+    this.broadcastRoomList();
+  }
+
+  private async startCpuMatch(client: ConnectedClient, pathChoice?: EncounterPathChoice) {
+    const game = client.roomCode && this.gameStore.getGame(client.roomCode);
+    if (pathChoice !== undefined) {
+      if (!game || game.adventure || !game.encounterPath || game.battle || game.paused ||
+          game.phase !== 'ended' || client.playerId !== game.hostPlayerId ||
+          !['replay', 'higher', 'resume', 'save'].includes(pathChoice)) {
+        throw new ConflictException('Only the host can choose the next Highlands Path run.');
+      }
+      return this.choosePathDifficulty(game, game.encounterPath, pathChoice);
+    }
+    if (
+      !game ||
+      game.battleMode !== 'cpu' ||
+      game.paused ||
+      (game.adventure && game.phase === 'waiting') ||
+      (game.phase !== 'waiting' && !(game.phase === 'battle' && !game.battle && game.encounterPath?.status === 'active')) ||
+      client.playerId !== game.hostPlayerId ||
+      !game.openingEnemy
+    ) {
+      return this.sendError(
+        client.socket,
+        'Only the host can enter an available encounter.',
+      );
+    }
+    if (game.adventure && !game.adventureQuest?.ready) {
+      return this.sendError(client.socket, 'Complete the local quest before entering combat.');
+    }
+    if (game.encounterPath?.savePending) {
+      await this.savePathMilestone(game, game.encounterPath, 6);
+      if (game.battle) return;
+    }
+    this.startStagedCpuMatch(game);
+    this.broadcastState(game.roomCode);
+    this.broadcastRoomList();
+  }
+
+  private startStagedCpuMatch(game: GameState) {
+    const host = game.hostPlayerId && this.findPlayer(game, game.hostPlayerId);
+    if (!host || !host.connected || !host.fighterId || !game.openingEnemy) {
+      throw new ConflictException(
+        'The host must choose a fighter before starting.',
+      );
+    }
+    if (game.adventure && game.phase === 'waiting') {
+      game.phase = 'battle';
+      return;
+    }
+    const path = game.encounterPath;
+    if (path?.status === 'cleared') {
+      game.phase = 'ended';
+      return;
+    }
+    const opponents = path ? encounterOpponents(path) : [];
+    if (!path || !opponents.length) {
+      this.startCpuBattle(game, game.openingEnemy);
+      return;
+    }
+    game.phase = 'battle';
+    game.battle = this.combatEngine.createEncounterBattle(game, game.currentTeamId, opponents);
+    game.battle.log.push('Level ' + (path.index + 1) + ' begins.');
+    this.broadcastRoundState(game);
+    this.startRoundTimeout(game);
+  }
+
+  private startCpuBattle(game: GameState, enemyName: string) {
+    const config = ENEMY_CONFIGS[enemyName];
+    game.phase = 'battle';
+    game.battle = this.combatEngine.createCpuBattle(
+      game,
+      game.currentTeamId,
+      enemyName,
+      config?.hp ?? 1200,
+      config?.hp ?? 1200,
+      {
+        attack: config?.attack ?? 100,
+        personality: config?.personality ?? 'aggressive',
+        abilityChance: config?.abilityChance ?? 0.35,
+        signatureEveryNRounds: config?.signatureEveryNRounds ?? 4,
+        signatureMultiplier: config?.signatureMultiplier ?? 1.6,
+        telegraphs: config?.telegraphs,
+        phases: config?.phases,
+        abilities: config?.abilities,
+      },
+    );
+    if (game.battle) {
+      game.battle.queuedActions = [];
+      game.battle.readyPlayerIds = [];
+      game.battle.log.push(`${enemyName} emerges from the Highlands.`);
+    }
+    this.broadcastRoundState(game);
+    this.startRoundTimeout(game);
   }
 
   private generateRoomCode(): string {
@@ -475,29 +1240,53 @@ export class GameGateway {
     if (!roomCode) return;
     const game = this.gameStore.getGame(roomCode);
     if (!game || game.battleMode !== 'pvp') return;
-    if (game.phase !== 'waiting') {
-      this.sendError(client.socket, 'The match has already started.');
-      return;
-    }
-
-    if (game.hostPlayerId && client.playerId !== game.hostPlayerId) {
+    if (client.playerId !== game.hostPlayerId) {
       this.sendError(client.socket, 'Only the host can start the match.');
       return;
     }
+    this.startPvp(game);
+  }
 
-    const populated = ALL_TEAMS.filter(
-      (id) => game.teams[id].players.length > 0,
+  private startPvp(game: GameState) {
+    if (game.phase !== 'waiting') {
+      throw new ConflictException('The match has already started.');
+    }
+
+    const populated = ALL_TEAMS.filter((id) =>
+      game.teams[id].players.some((player) => player.connected),
     );
 
-    if (populated.length < 2) {
-      this.sendError(
-        client.socket,
-        'At least two teams must have players before starting.',
+    if (populated.length !== 2) {
+      throw new ConflictException(
+        'Exactly two teams must have players before starting.',
       );
-      return;
+    }
+    if (
+      populated.some((id) =>
+        game.teams[id].players.some(
+          (player) =>
+            player.connected &&
+            (!player.ready || (game.arenaId && !player.fighterId)),
+        ),
+      )
+    ) {
+      throw new ConflictException(
+        game.arenaId
+          ? 'Every player must choose a fighter and confirm their loadout.'
+          : 'Every player must confirm their loadout before starting.',
+      );
     }
 
     const [teamA, teamB] = populated;
+    for (const id of populated) {
+      game.teams[id].players = game.teams[id].players.filter(
+        (player) => player.connected,
+      );
+      for (const player of game.teams[id].players) {
+        player.hp = player.maxHp;
+        player.status = 'alive';
+      }
+    }
     game.activeTeams = populated;
     game.currentTeamId = teamA;
     game.phase = 'battle';
@@ -512,7 +1301,8 @@ export class GameGateway {
 
     this.broadcastRoundState(game);
     this.startRoundTimeout(game);
-    this.broadcastState(roomCode);
+    this.broadcastState(game.roomCode);
+    this.broadcastRoomList();
   }
 
   /**
@@ -534,18 +1324,59 @@ export class GameGateway {
       return;
     }
 
-    if (game.hostPlayerId && client.playerId !== game.hostPlayerId) {
+    if (client.playerId !== game.hostPlayerId) {
       this.sendError(client.socket, 'Only the host can set the team cap.');
       return;
     }
 
-    const cap = Math.max(
-      MIN_TEAM_CAP,
-      Math.min(MAX_TEAM_CAP, Math.floor(event.teamCap)),
-    );
+    const cap = event.teamCap;
+    if (!Number.isInteger(cap) || cap < MIN_TEAM_CAP || cap > MAX_TEAM_CAP) {
+      return this.sendError(
+        client.socket,
+        'Choose a team size between 1 and 10.',
+      );
+    }
 
     game.teamCap = cap;
     this.broadcastState(roomCode);
+  }
+
+  private setStartingHp(
+    client: ConnectedClient,
+    event: Extract<GameEvent, { type: 'SET_STARTING_HP' }>,
+  ) {
+    const game = client.roomCode && this.gameStore.getGame(client.roomCode);
+    if (
+      !game ||
+      game.battleMode !== 'pvp' ||
+      game.phase !== 'waiting' ||
+      game.hostPlayerId !== client.playerId
+    ) {
+      return this.sendError(
+        client.socket,
+        'Only the host can set HP before a PvP match.',
+      );
+    }
+    if (!validHp(event.hp))
+      return this.sendError(
+        client.socket,
+        'Starting HP must be a whole number from 250 to 10,000.',
+      );
+    if (event.targetId) {
+      const player = this.findPlayer(game, event.targetId);
+      if (!player)
+        return this.sendError(
+          client.socket,
+          'That player is no longer in the room.',
+        );
+      player.hp = player.maxHp = event.hp;
+    } else {
+      game.startingHp = event.hp;
+      for (const team of Object.values(game.teams)) {
+        for (const player of team.players) player.hp = player.maxHp = event.hp;
+      }
+    }
+    this.broadcastState(game.roomCode);
   }
 
   /* ================================================================== */
@@ -591,7 +1422,7 @@ export class GameGateway {
     const event = { type: 'PLAYER_LIST_UPDATE' as const, players };
 
     for (const client of this.clients) {
-      if (client.watcher) {
+      if (client.moderator) {
         client.socket.emit('message', JSON.stringify(event));
       }
     }
@@ -610,22 +1441,29 @@ export class GameGateway {
       return;
     }
 
+    this.controlRoom(game.roomCode, { action: 'kick', playerId });
+  }
+
+  private moderatorKick(game: GameState, player: Player) {
+    const kicked = this.kickedPlayers.get(game) ?? new Set<string>();
+    kicked.add(player.id);
+    this.kickedPlayers.set(game, kicked);
+    for (const client of this.clients) {
+      if (client.roomCode === game.roomCode && client.playerId === player.id) {
+        this.send(client.socket, {
+          type: 'ROOM_REMOVED',
+          roomCode: game.roomCode,
+        });
+        this.removeFromRoom(client);
+      }
+    }
     const team = game.teams[player.teamId];
-    const idx = team.players.findIndex((p) => p.id === playerId);
-    if (idx >= 0) team.players.splice(idx, 1);
-
-    this.clampRotations(game);
-
-    if (game.activePlayerId === playerId) this.advanceActivePlayer(game);
-
-    this.broadcastEvent(game.roomCode, { type: 'ELIMINATE', playerId });
-    this.broadcastState(game.roomCode);
-    this.broadcastRoomList();
-    this.broadcastPlayerList();
-
-    this.logger.log(
-      `Admin kicked player ${player.name} (${playerId}) from ${player.teamId}`,
-    );
+    team.players = team.players.filter((entry) => entry.id !== player.id);
+    if (game.hostPlayerId === player.id) {
+      game.hostPlayerId = Object.values(game.teams)
+        .flatMap((entry) => entry.players)
+        .find((entry) => entry.connected)?.id;
+    }
   }
 
   /* ================================================================== */
@@ -651,6 +1489,7 @@ export class GameGateway {
 
   private startRoundTimeout(game: GameState) {
     this.clearRoundTimeout(game.roomCode);
+    if (game.paused) return;
 
     const handle = setTimeout(() => {
       this.logger.warn(
@@ -667,16 +1506,30 @@ export class GameGateway {
     });
   }
 
+  private clearRoomTimers(roomCode: string) {
+    this.clearRoundTimeout(roomCode);
+    this.clearStoryTimeout(roomCode);
+    clearTimeout(this.roomTransitionTimers.get(roomCode));
+    this.roomTransitionTimers.delete(roomCode);
+  }
+
   private async handleRoundTimeout(roomCode: string) {
+    this.roundTimeoutHandles.delete(roomCode);
     const game = this.gameStore.getGame(roomCode);
     const battle = game?.battle;
 
-    if (!game || !battle || battle.status !== 'active') {
+    if (!game || game.paused || !battle || battle.status !== 'active') {
       this.clearRoundTimeout(roomCode);
       return;
     }
 
-    if (this.resolvingRound) return;
+    if (this.resolvingRooms.has(roomCode)) return;
+    if (
+      !Object.values(game.teams).some((team) =>
+        team.players.some((player) => player.connected),
+      )
+    )
+      return;
 
     this.logger.log(
       `Auto-resolving round: room=${roomCode} team=${battle.turnTeamId} queued=${battle.queuedActions?.length ?? 0}`,
@@ -687,7 +1540,7 @@ export class GameGateway {
 
   private startStoryTimeout(game: GameState) {
     this.clearStoryTimeout(game.roomCode);
-    if (game.phase !== 'story') return;
+    if (game.paused || game.phase !== 'story') return;
 
     const handle = setTimeout(() => {
       this.logger.warn(
@@ -701,7 +1554,7 @@ export class GameGateway {
 
   private handleStoryTimeout(roomCode: string) {
     const game = this.gameStore.getGame(roomCode);
-    if (!game || game.phase !== 'story') {
+    if (!game || game.paused || game.phase !== 'story') {
       this.clearStoryTimeout(roomCode);
       return;
     }
@@ -733,8 +1586,7 @@ export class GameGateway {
     }
 
     const fresh = this.gameStore.createRoom(GLOBAL_ROOM_CODE);
-    const node = this.storyEngine.getInitialNode();
-    if (node) fresh.currentNodeId = node.id;
+    this.storyEngine.resetRun(fresh);
     return fresh;
   }
 
@@ -743,13 +1595,14 @@ export class GameGateway {
     if (!roomCode) return;
     const game = this.gameStore.getGame(roomCode);
 
-    if (game && client.playerId) {
+    if (game && client.playerId && !client.watcher) {
       const player = this.findPlayer(game, client.playerId);
       if (player) player.connected = false;
     }
 
     void client.socket.leave(roomCode);
     client.roomCode = undefined;
+    client.playerId = undefined;
 
     if (game) {
       this.broadcastState(roomCode);
@@ -762,7 +1615,9 @@ export class GameGateway {
     client: ConnectedClient,
     event: Extract<GameEvent, { type: 'LEAVE_GAME' }>,
   ) {
-    const game = this.findGameByPlayer(event.playerId);
+    const game = client.roomCode
+      ? this.gameStore.getGame(client.roomCode)
+      : undefined;
     if (!game) return;
 
     for (const team of Object.values(game.teams)) {
@@ -797,6 +1652,7 @@ export class GameGateway {
   private joinGame(
     client: ConnectedClient,
     event: Extract<GameEvent, { type: 'JOIN_GAME' }>,
+    loadout: Loadout,
   ) {
     const roomCode = event.roomCode ?? client.roomCode ?? GLOBAL_ROOM_CODE;
     const game =
@@ -809,7 +1665,23 @@ export class GameGateway {
       this.send(client.socket, { type: 'ROOM_NOT_FOUND', roomCode });
       return;
     }
+    if (this.kickedPlayers.get(game)?.has(event.playerId)) {
+      this.sendError(client.socket, 'A moderator removed you from this room.');
+      return;
+    }
 
+    if (
+      game.battleMode === 'cpu' &&
+      game.arenaId &&
+      event.playerId !== game.hostPlayerId
+    ) {
+      return this.sendError(
+        client.socket,
+        'This enemy battle is reserved for its host.',
+      );
+    }
+    const existingPlayer = this.findPlayer(game, event.playerId);
+    if (existingPlayer) event.teamId = existingPlayer.teamId;
     const team = game.teams[event.teamId];
     if (!team) {
       this.sendError(client.socket, 'Invalid team.');
@@ -820,9 +1692,26 @@ export class GameGateway {
     const fallbackName = event.playerId.slice(0, 6).toUpperCase();
     const desiredName = requestedName.length > 0 ? requestedName : fallbackName;
 
-    const existingPlayer = team.players.find(
-      (player) => player.id === event.playerId,
-    );
+    if (!existingPlayer && game.battleMode && game.phase !== 'waiting') {
+      return this.sendError(
+        client.socket,
+        'This match has started. You can watch from the spectator menu.',
+      );
+    }
+    if (
+      !existingPlayer?.connected &&
+      game.phase === 'waiting' &&
+      game.battleMode === 'pvp' &&
+      !team.players.some((player) => player.connected) &&
+      ALL_TEAMS.filter((id) =>
+        game.teams[id].players.some((player) => player.connected),
+      ).length >= 2
+    ) {
+      return this.sendError(
+        client.socket,
+        'Choose one of the two teams in this arena.',
+      );
+    }
 
     if (!existingPlayer) {
       const nameTaken = Object.values(game.teams)
@@ -843,7 +1732,11 @@ export class GameGateway {
     }
 
     // Enforce the PvP team cap.
-    if (game.battleMode === 'pvp' && !existingPlayer) {
+    if (
+      game.battleMode === 'pvp' &&
+      game.phase === 'waiting' &&
+      !existingPlayer?.connected
+    ) {
       const cap = game.teamCap ?? DEFAULT_TEAM_CAP;
       const connectedCount = team.players.filter((p) => p.connected).length;
       if (connectedCount >= cap) {
@@ -868,28 +1761,14 @@ export class GameGateway {
       }
     }
 
-    if (
-      client.playerId &&
-      client.playerId !== event.playerId &&
-      client.roomCode === roomCode
-    ) {
-      for (const t of Object.values(game.teams)) {
-        const idx = t.players.findIndex((p) => p.id === client.playerId);
-        if (idx >= 0) {
-          t.players.splice(idx, 1);
-          break;
-        }
-      }
-      this.clampRotations(game);
-    }
-
     if (!existingPlayer) {
       team.players.push({
         id: event.playerId,
         name: desiredName,
         teamId: event.teamId,
-        hp: 2000,
-        maxHp: 2000,
+        hp: game.startingHp ?? DEFAULT_HP,
+        maxHp: game.startingHp ?? DEFAULT_HP,
+        loadout,
         status: 'alive',
         ready: false,
         connected: true,
@@ -898,11 +1777,27 @@ export class GameGateway {
       });
     } else {
       existingPlayer.connected = true;
-      existingPlayer.name = desiredName;
+      if (game.phase === 'waiting') {
+        if (JSON.stringify(existingPlayer.loadout) !== JSON.stringify(loadout))
+          existingPlayer.ready = false;
+        existingPlayer.loadout = loadout;
+      }
     }
 
     if (client.roomCode && client.roomCode !== roomCode) {
-      void client.socket.leave(client.roomCode);
+      this.removeFromRoom(client);
+    }
+    for (const other of this.clients) {
+      if (
+        other !== client &&
+        other.roomCode === roomCode &&
+        other.playerId === event.playerId &&
+        !other.watcher
+      ) {
+        this.removeFromRoom(other);
+        const player = this.findPlayer(game, event.playerId);
+        if (player) player.connected = true;
+      }
     }
     void client.socket.join(roomCode);
 
@@ -918,6 +1813,12 @@ export class GameGateway {
     this.broadcastState(roomCode);
     this.broadcastRoomList();
     this.broadcastPlayerList();
+    if (
+      game.battle?.status === 'active' &&
+      !this.roundTimeoutHandles.has(roomCode) &&
+      !this.resolvingRooms.has(roomCode)
+    )
+      this.startRoundTimeout(game);
   }
 
   private watchGame(
@@ -935,29 +1836,36 @@ export class GameGateway {
       return;
     }
 
+    this.removeFromRoom(client);
     client.watcher = true;
-    if (client.roomCode && client.roomCode !== roomCode) {
-      void client.socket.leave(client.roomCode);
-    }
     void client.socket.join(roomCode);
 
     client.roomCode = roomCode;
-    client.playerId = event.watcherId;
-
-    for (const past of this.recentEvents) this.send(client.socket, past);
+    client.playerId = undefined;
 
     this.broadcastStory(roomCode);
     this.sendState(client.socket, game);
     this.sendRoomList(client.socket);
-    this.sendPlayerList(client.socket);
   }
 
-  private playerReady(client: ConnectedClient, playerId: string) {
-    const game = this.findGameByPlayer(playerId);
-    if (!game) return;
+  private playerReady(
+    client: ConnectedClient,
+    playerId: string,
+    ready: boolean,
+  ) {
+    const game = client.roomCode
+      ? this.gameStore.getGame(client.roomCode)
+      : undefined;
+    if (!game || game.phase !== 'waiting') return;
     const player = this.findPlayer(game, playerId);
     if (!player) return;
-    player.ready = true;
+    if (ready && game.arenaId && !player.fighterId) {
+      return this.sendError(
+        client.socket,
+        'Choose your fighter before readying up.',
+      );
+    }
+    player.ready = ready;
     this.broadcastState(game.roomCode);
     this.broadcastRoomList();
   }
@@ -976,24 +1884,33 @@ export class GameGateway {
       this.sendError(client.socket, 'Game not found.');
       return;
     }
+    this.activateStory(game, event.teamCaps);
+  }
 
-    const populated = ALL_TEAMS.filter(
-      (id) => game.teams[id].players.length > 0,
+  private activateStory(game: GameState, caps?: GameState['teamCaps']) {
+    const roomCode = game.roomCode;
+    if (game.battleMode || game.phase !== 'waiting')
+      throw new ConflictException(
+        'Only a waiting story room can be activated.',
+      );
+    const populated = ALL_TEAMS.filter((id) =>
+      game.teams[id].players.some((player) => player.connected),
     );
 
     if (populated.length < 2) {
-      this.sendError(
-        client.socket,
+      throw new ConflictException(
         'At least two teams must have players before activation.',
       );
-      return;
     }
 
-    if (event.teamCaps) {
+    if (caps) {
       const filteredCaps = Object.fromEntries(
         populated
-          .filter((id) => event.teamCaps![id] !== undefined)
-          .map((id) => [id, event.teamCaps![id]]),
+          .filter(
+            (id) =>
+              Number.isInteger(caps[id]) && caps[id]! >= 1 && caps[id]! <= 10,
+          )
+          .map((id) => [id, caps[id]]),
       ) as Partial<Record<TeamId, number>>;
       game.teamCaps = filteredCaps;
     }
@@ -1001,12 +1918,15 @@ export class GameGateway {
     game.activeTeams = populated;
     game.currentTeamId = populated[0];
     game.phase = 'story';
+    this.storyEngine.startRun(game);
 
     game.playerRotation = {};
     for (const teamId of populated) game.playerRotation[teamId] = 0;
 
     const firstTeam = game.teams[populated[0]];
-    const firstAlive = firstTeam.players.find((p) => p.status === 'alive');
+    const firstAlive = firstTeam.players.find(
+      (p) => p.status === 'alive' && p.connected,
+    );
     game.activePlayerId = firstAlive?.id;
     game.lastActivePlayerId = firstAlive?.id;
 
@@ -1027,13 +1947,13 @@ export class GameGateway {
   }
 
   private changeTeamTurn(client: ConnectedClient, teamId: TeamId) {
-    const roomCode = client.roomCode;
-    if (!roomCode) return;
+    const roomCode = client.roomCode ?? GLOBAL_ROOM_CODE;
     const game = this.gameStore.getGame(roomCode);
     if (!game) {
       this.sendError(client.socket, 'Game not found.');
       return;
     }
+    if (game.phase !== 'story' || !ALL_TEAMS.includes(teamId)) return;
 
     game.currentTeamId = teamId;
     const team = game.teams[teamId];
@@ -1166,9 +2086,17 @@ export class GameGateway {
     this.clearRoundTimeout(game.roomCode);
     this.clearStoryTimeout(game.roomCode);
 
-    setTimeout(() => {
-      void this.restartGame(game.roomCode);
-    }, 15_000);
+    this.roomTransitionTimers.set(
+      game.roomCode,
+      setTimeout(() => {
+        this.roomTransitionTimers.delete(game.roomCode);
+        if (
+          this.gameStore.getGame(game.roomCode) === game &&
+          game.phase === 'ended'
+        )
+          this.restartGame(game.roomCode);
+      }, 15_000),
+    );
 
     this.broadcastState(game.roomCode);
   }
@@ -1192,7 +2120,7 @@ export class GameGateway {
     client: ConnectedClient,
     event: Extract<GameEvent, { type: 'CHOICE' }>,
   ) {
-    if (this.activeCutsceneId) {
+    if (client.roomCode === GLOBAL_ROOM && this.activeCutsceneId) {
       this.sendError(client.socket, 'A cutscene is playing.');
       return;
     }
@@ -1204,6 +2132,9 @@ export class GameGateway {
       this.sendError(client.socket, 'Game not found.');
       return;
     }
+    if (game.phase !== 'story') return;
+    if (game.paused)
+      return this.sendError(client.socket, 'A moderator paused this room.');
 
     const player = this.findPlayer(game, event.playerId);
     if (!player) {
@@ -1223,16 +2154,26 @@ export class GameGateway {
       return;
     }
 
-    const result = this.storyEngine.applyChoice(game, event.choiceId);
+    this.resolveStoryChoice(game, event.choiceId);
+  }
+
+  private resolveStoryChoice(game: GameState, choiceId: string) {
+    const roomCode = game.roomCode;
+    const scene = this.storyEngine.getNode(game.currentNodeId, game);
+    const result = this.storyEngine.applyChoice(game, choiceId);
     if (!result) {
-      this.sendError(client.socket, 'Invalid story choice.');
-      return;
+      throw new BadRequestException('Choose a valid option for this scene.');
     }
 
     this.clearStoryTimeout(roomCode);
 
     const { choice } = result;
-    this.playCutscene(choice.cutscene, 'story', false, roomCode);
+    this.playCutscene(
+      choice.cutscene ?? scene?.onChoice?.[choice.id],
+      'story',
+      false,
+      roomCode,
+    );
 
     if (choice.result === 'battle') {
       this.startBattleFromChoice(game, choice);
@@ -1248,7 +2189,7 @@ export class GameGateway {
     }
 
     if (choice.result === 'random') {
-      this.handleRandomEncounter(game, choice.nextNodeId, choice.onBattle);
+      this.handleRandomEncounter(game, choice);
       this.broadcastStory(roomCode);
       this.broadcastState(roomCode);
       this.broadcastRoomList();
@@ -1317,7 +2258,9 @@ export class GameGateway {
         game.currentNodeId,
       );
     } else if (choice.enemyName) {
-      const config = ENEMY_CONFIGS[choice.enemyName];
+      const config = Object.hasOwn(ENEMY_CONFIGS, choice.enemyName)
+        ? ENEMY_CONFIGS[choice.enemyName]
+        : undefined;
 
       if (config) {
         game.battle = this.combatEngine.createCpuBattle(
@@ -1413,11 +2356,8 @@ export class GameGateway {
     this.broadcastRoomList();
   }
 
-  private handleRandomEncounter(
-    game: GameState,
-    nextNodeId?: string,
-    onBattle?: Cutscene,
-  ) {
+  private handleRandomEncounter(game: GameState, choice: StoryChoice) {
+    const { nextNodeId, onBattle } = choice;
     const team = game.teams[game.currentTeamId];
     const alive = team.players.filter((p) => p.status === 'alive');
     const aliveCount = alive.length;
@@ -1433,6 +2373,7 @@ export class GameGateway {
     const encounterChance = 0.4 + damageRatio * 0.2 + sizeFactor;
 
     if (Math.random() > encounterChance) {
+      if (nextNodeId) game.currentNodeId = nextNodeId;
       this.advanceActivePlayer(game);
       return;
     }
@@ -1565,16 +2506,21 @@ export class GameGateway {
     }>;
 
     const encounter = this.weightedPick(pool);
+    const enemyName = choice.enemyName ?? encounter.name;
+    const maxHp = choice.enemyMaxHp ?? encounter.hp;
 
     game.phase = 'battle';
+    game.pendingNextNodeId = nextNodeId;
     game.battle = this.combatEngine.createCpuBattle(
       game,
       game.currentTeamId,
-      encounter.name,
-      encounter.hp,
-      encounter.hp,
+      enemyName,
+      choice.enemyHp ?? maxHp,
+      maxHp,
       {
-        attack: encounter.attack,
+        attack: choice.enemyAttack ?? encounter.attack,
+        abilities: choice.enemyAbilities,
+        phases: choice.enemyPhases,
         personality: encounter.personality,
         abilityChance: encounter.abilityChance,
         signatureEveryNRounds: encounter.signatureEveryNRounds,
@@ -1587,7 +2533,7 @@ export class GameGateway {
       game.battle.queuedActions = [];
       game.battle.readyPlayerIds = [];
       game.battle.intro = onBattle;
-      game.battle.log.push(`${encounter.name} emerges from the Highlands.`);
+      game.battle.log.push(`${enemyName} emerges from the Highlands.`);
       this.playCutscene(onBattle, 'battle', false, game.roomCode);
     }
 
@@ -1640,7 +2586,7 @@ export class GameGateway {
     client: ConnectedClient,
     event: Extract<GameEvent, { type: 'COMBAT_QUEUE_ACTION' }>,
   ) {
-    if (this.activeCutsceneId) {
+    if (client.roomCode === GLOBAL_ROOM && this.activeCutsceneId) {
       this.sendError(client.socket, 'A cutscene is playing.');
       return;
     }
@@ -1649,6 +2595,9 @@ export class GameGateway {
     if (!roomCode) return;
     const game = this.gameStore.getGame(roomCode);
     if (!game) return;
+    if (game.paused)
+      return this.sendError(client.socket, 'A moderator paused this room.');
+    if (this.resolvingRooms.has(roomCode)) return;
 
     const battle = game.battle;
     if (!battle || battle.status !== 'active') {
@@ -1666,6 +2615,11 @@ export class GameGateway {
     if (!expected.some((p) => p.id === player.id)) {
       this.sendError(client.socket, 'It is not your turn.');
       return;
+    }
+    try {
+      this.combatEngine.validateAction(player, event.action, event.variant);
+    } catch (error) {
+      return this.sendError(client.socket, (error as Error).message);
     }
 
     battle.queuedActions = battle.queuedActions ?? [];
@@ -1693,15 +2647,21 @@ export class GameGateway {
     const allReady = expected.every((p) =>
       battle.readyPlayerIds!.includes(p.id),
     );
-    if (allReady && !this.resolvingRound) void this.resolveRound(game);
+    if (allReady) void this.resolveRound(game);
   }
 
   private async resolveRound(game: GameState) {
     const battle = game.battle;
-    if (!battle || battle.status !== 'active') return;
+    if (
+      !battle ||
+      game.paused ||
+      battle.status !== 'active' ||
+      this.resolvingRooms.has(game.roomCode)
+    )
+      return;
 
     this.clearRoundTimeout(game.roomCode);
-    this.resolvingRound = true;
+    this.resolvingRooms.add(game.roomCode);
 
     try {
       const expected = this.expectedActors(game, battle);
@@ -1714,18 +2674,34 @@ export class GameGateway {
         battle.queuedActions!.push({ playerId: p.id, action: 'attack' });
       }
 
-      const queue = [...(battle.queuedActions ?? [])];
+      const speed = new Map(expected.map((player) => [player.id, player.loadout?.strength?.speed ?? 1]));
+      const queue = [...(battle.queuedActions ?? [])].sort((a, b) =>
+        (speed.get(b.playerId) ?? 1) - (speed.get(a.playerId) ?? 1));
 
       for (const entry of queue) {
         const live = this.gameStore.getGame(game.roomCode);
-        if (!live?.battle || live.battle.status !== 'active') break;
+        if (live?.battle !== battle || battle.status !== 'active') break;
 
         const liveBattle = live.battle;
         const actor = this.findPlayer(live, entry.playerId);
-        if (!actor || actor.status !== 'alive') continue;
+        if (!actor?.connected || actor.status !== 'alive') continue;
 
         const before = liveBattle.log.length;
+        let presentationDelay = ACTION_RESOLVE_DELAY_MS;
         try {
+          if (entry.action === 'item') {
+            const item = this.combatEngine.battleItemFor(actor, entry.variant);
+            if (!actor.battleItems?.[item]) {
+              if (!(await this.progression.consumeItem(actor.id, item))) {
+                liveBattle.log.push(
+                  `${actor.name} is out of their equipped item and attacks instead.`,
+                );
+                entry.action = 'attack';
+              } else {
+                this.broadcastEvent(live.roomCode, { type: 'PROFILE_UPDATED' });
+              }
+            }
+          }
           this.combatEngine.performAction(
             live,
             actor,
@@ -1733,6 +2709,15 @@ export class GameGateway {
             entry.variant,
             entry.targetId,
           );
+          if (entry.action === 'limit') {
+            presentationDelay = LIMIT_BREAK_RESOLVE_DELAY_MS;
+          }
+          if (queued.has(actor.id)) {
+            const contributors =
+              this.contributors.get(battle) ?? new Set<string>();
+            contributors.add(actor.id);
+            this.contributors.set(battle, contributors);
+          }
 
           const newLines = liveBattle.log.slice(before);
           for (const line of newLines) {
@@ -1757,19 +2742,30 @@ export class GameGateway {
           this.logger.warn(`Action failed: ${err}`);
         }
 
+        if (liveBattle.status === 'active' || presentationDelay === LIMIT_BREAK_RESOLVE_DELAY_MS) {
+          await this.wait(presentationDelay);
+        }
         if (liveBattle.status !== 'active') break;
-        await this.wait(ACTION_RESOLVE_DELAY_MS);
       }
 
       const live = this.gameStore.getGame(game.roomCode);
-      if (!live?.battle) {
-        this.resolvingRound = false;
-        return;
-      }
+      if (live?.battle !== battle) return;
       const liveBattle = live.battle;
 
       if (liveBattle.status !== 'active') {
-        this.finishRound(live);
+        await this.finishRound(live);
+        return;
+      }
+
+      const beforeCompanions = liveBattle.log.length;
+      this.combatEngine.resolveCompanions(live);
+      if (liveBattle.log.length !== beforeCompanions) {
+        this.broadcastState(live.roomCode);
+        if (liveBattle.status === 'active') await this.wait(500);
+        if (this.gameStore.getGame(live.roomCode)?.battle !== liveBattle) return;
+      }
+      if (liveBattle.status !== 'active') {
+        await this.finishRound(live);
         return;
       }
 
@@ -1805,7 +2801,7 @@ export class GameGateway {
         });
 
         if (liveBattle.status !== 'active') {
-          this.finishRound(live);
+          await this.finishRound(live);
           return;
         }
       }
@@ -1814,17 +2810,67 @@ export class GameGateway {
       liveBattle.readyPlayerIds = [];
       this.combatEngine.nextTurn(live);
       this.combatEngine.tickStatuses(live);
+      if (liveBattle.status !== 'active') {
+        await this.finishRound(live);
+        return;
+      }
 
       this.broadcastRoundState(live);
       this.broadcastState(live.roomCode);
       this.broadcastRoomList();
       this.startRoundTimeout(live);
     } finally {
-      this.resolvingRound = false;
+      this.resolvingRooms.delete(game.roomCode);
     }
   }
 
-  private finishRound(game: GameState) {
+  private async savePathMilestone(game: GameState, path: EncounterPath, cleared: 6 | 12) {
+    if (!game.hostPlayerId) throw new ConflictException('This path has no player account.');
+    const result = await this.progression.saveEncounterCheckpoint(game.hostPlayerId, path, cleared);
+    path.savedWins = result.savedWins;
+    path.savePending = undefined;
+    if (result.reward && result.progression) {
+      path.completionReward = result.reward;
+      const host = this.findPlayer(game, game.hostPlayerId);
+      if (host?.loadout) {
+        const { attack, defense, speed } = result.progression;
+        host.loadout.strength = { attack, defense, speed };
+      }
+      this.broadcastEvent(game.roomCode, { type: 'PROFILE_UPDATED' });
+    }
+  }
+
+  private async finishRound(game: GameState) {
+    const battle = game.battle;
+    if (battle && (battle.status === 'victory' || battle.status === 'defeat')) {
+      const results = await Promise.allSettled(
+        [...(this.contributors.get(battle) ?? [])].map(async (id) => {
+          const progression = await this.progression.reward(id, battle.id);
+          const player = this.findPlayer(game, id);
+          if (progression && player?.loadout) {
+            player.loadout.strength = { attack: progression.attack, defense: progression.defense, speed: progression.speed };
+          }
+        }),
+      );
+      if (results.some((result) => result.status === 'rejected')) {
+        this.logger.error(
+          `Could not award every participation reward for battle ${battle.id}`,
+        );
+      }
+      this.broadcastEvent(game.roomCode, { type: 'PROFILE_UPDATED' });
+    }
+    const path = game.encounterPath;
+    if (!game.adventure && path?.levels.length === 12 && battle?.mode === 'cpu' &&
+        battle.encounterId && battle.status === 'victory' && battle.enemyHp === 0 &&
+        (path.index === 5 || path.index === 11)) {
+      try {
+        await this.savePathMilestone(game, path, path.index === 5 ? 6 : 12);
+      } catch {
+        path.savePending = true;
+        this.logger.error('Could not save Highlands Path milestone for room ' + game.roomCode);
+      }
+    }
+    if (game.battle !== battle) return;
     this.endBattleAndAdvance(game);
     this.broadcastStory(game.roomCode);
     this.broadcastState(game.roomCode);
@@ -1883,41 +2929,39 @@ export class GameGateway {
     }
 
     if (game.battleMode === 'cpu') {
+      if (game.encounterPath && battle?.mode === 'cpu' && battle.encounterId) {
+        const path = game.encounterPath;
+        this.broadcastState(game.roomCode);
+        game.battle = undefined;
+        if (battle.status === 'defeat') {
+          path.status = 'defeated';
+          game.phase = 'ended';
+        } else if (!game.adventure && battle.enemyHp > 0) {
+          // A moderator can end a fight, but a forced result does not earn a path win.
+          return;
+        } else if (path.index === path.levels.length - 1) {
+          path.status = 'cleared';
+          game.phase = 'ended';
+          if (!game.adventure && (path.tier ?? 1) < MAX_ENCOUNTER_TIER) path.nextTier = (path.tier ?? 1) + 1;
+        } else {
+          path.index += 1;
+          if (game.adventure) game.adventureQuest = createAdventureQuest();
+          game.openingEnemy = path.levels[path.index].name;
+          for (const player of game.teams[battle.attackerTeamId].players) {
+            if (player.status === 'alive') {
+              player.hp = Math.min(player.maxHp, player.hp + Math.ceil(player.maxHp * 0.3));
+            }
+          }
+        }
+        return;
+      }
+      if (battle?.status === 'defeat') {
+        game.phase = 'ended';
+        return;
+      }
       game.battle = undefined;
       game.phase = 'battle';
-
-      setTimeout(() => {
-        const fresh = this.gameStore.getGame(game.roomCode);
-        if (!fresh || fresh.battleMode !== 'cpu') return;
-
-        const nextEnemy = this.pickRandomOpeningEnemy();
-        const config = ENEMY_CONFIGS[nextEnemy];
-        fresh.battle = this.combatEngine.createCpuBattle(
-          fresh,
-          fresh.currentTeamId,
-          nextEnemy,
-          config?.hp ?? 1200,
-          config?.hp ?? 1200,
-          {
-            attack: config?.attack ?? 100,
-            personality: config?.personality ?? 'aggressive',
-            abilityChance: config?.abilityChance ?? 0.35,
-            signatureEveryNRounds: config?.signatureEveryNRounds ?? 4,
-            signatureMultiplier: config?.signatureMultiplier ?? 1.6,
-            telegraphs: config?.telegraphs,
-            phases: config?.phases,
-            abilities: config?.abilities,
-          },
-        );
-        if (fresh.battle) {
-          fresh.battle.queuedActions = [];
-          fresh.battle.readyPlayerIds = [];
-          fresh.battle.log.push(`${nextEnemy} emerges from the Highlands.`);
-        }
-        this.broadcastRoundState(fresh);
-        this.startRoundTimeout(fresh);
-        this.broadcastState(fresh.roomCode);
-      }, 4000);
+      this.scheduleCpuEncounter(game);
       return;
     }
 
@@ -1925,6 +2969,13 @@ export class GameGateway {
       // Return to the waiting screen. Host can start a new match.
       game.battle = undefined;
       game.phase = 'waiting';
+      for (const team of Object.values(game.teams)) {
+        for (const player of team.players) {
+          player.ready = false;
+          player.hp = player.maxHp;
+          player.status = 'alive';
+        }
+      }
       this.broadcastState(game.roomCode);
       return;
     }
@@ -1941,6 +2992,48 @@ export class GameGateway {
     this.advanceActivePlayer(game);
   }
 
+  private scheduleCpuEncounter(game: GameState, delay = 4000) {
+    const code = game.roomCode;
+    clearTimeout(this.roomTransitionTimers.get(code));
+    const timer = setTimeout(() => {
+      this.roomTransitionTimers.delete(code);
+      const fresh = this.gameStore.getGame(code);
+      if (
+        fresh !== game ||
+        game.paused ||
+        game.phase !== 'battle' ||
+        game.battle
+      )
+        return;
+      const nextEnemy = this.pickRandomOpeningEnemy();
+      const config = ENEMY_CONFIGS[nextEnemy];
+      game.battle = this.combatEngine.createCpuBattle(
+        game,
+        game.currentTeamId,
+        nextEnemy,
+        config.hp,
+        config.hp,
+        {
+          attack: config.attack,
+          personality: config.personality,
+          abilityChance: config.abilityChance,
+          signatureEveryNRounds: config.signatureEveryNRounds,
+          signatureMultiplier: config.signatureMultiplier,
+          telegraphs: config.telegraphs,
+          phases: config.phases,
+          abilities: config.abilities,
+        },
+      );
+      game.battle.queuedActions = [];
+      game.battle.readyPlayerIds = [];
+      game.battle.log.push(`${nextEnemy} emerges from the Highlands.`);
+      this.broadcastRoundState(game);
+      this.startRoundTimeout(game);
+      this.broadcastState(code);
+    }, delay);
+    this.roomTransitionTimers.set(code, timer);
+  }
+
   /* ================================================================== */
   /* Cutscenes                                                           */
   /* ================================================================== */
@@ -1952,10 +3045,11 @@ export class GameGateway {
     roomCode?: string,
   ) {
     if (!cutscene || cutscene.lines.length === 0) return;
-    if (this.seenCutscenes.has(cutscene.id)) return;
-    this.seenCutscenes.add(cutscene.id);
+    if (cutscene.once && this.seenCutscenes.has(cutscene.id)) return;
+    if (cutscene.once) this.seenCutscenes.add(cutscene.id);
 
-    this.activeCutsceneId = pause ? cutscene.id : null;
+    if (!roomCode || roomCode === GLOBAL_ROOM)
+      this.activeCutsceneId = pause ? cutscene.id : null;
 
     this.broadcastEvent(roomCode ?? GLOBAL_ROOM, {
       type: 'CUTSCENE',
@@ -2001,7 +3095,7 @@ export class GameGateway {
     const game = this.gameStore.getGame(roomCode);
     if (!game) return;
 
-    const node = this.storyEngine.getNode(game.currentNodeId);
+    const node = this.storyEngine.getNode(game.currentNodeId, game);
     if (!node) return;
 
     this.broadcastEvent(roomCode, {
@@ -2013,7 +3107,12 @@ export class GameGateway {
       choices: node.choices,
     } as GameEvent);
 
-    if (game.currentNodeId !== this.lastCutsceneNodeId) {
+    if (
+      !game.battleMode &&
+      !game.paused &&
+      game.phase === 'story' &&
+      game.currentNodeId !== this.lastCutsceneNodeId
+    ) {
       this.lastCutsceneNodeId = game.currentNodeId;
       this.playCutscene(node.onEnter, 'story', false, roomCode);
     }
@@ -2042,8 +3141,6 @@ export class GameGateway {
   }
 
   private broadcastEvent(roomCode: string, event: GameEvent) {
-    this.recentEvents.push(event);
-    if (this.recentEvents.length > 60) this.recentEvents.shift();
     this.server.to(roomCode).emit('message', JSON.stringify(event));
   }
 
@@ -2075,7 +3172,7 @@ export class GameGateway {
     };
 
     for (const client of this.clients) {
-      if (client.watcher) {
+      if (client.watcher || client.moderator) {
         client.socket.emit('message', JSON.stringify(event));
       }
     }
@@ -2087,21 +3184,24 @@ export class GameGateway {
     const roomCode = client.roomCode;
     if (!roomCode) return;
     const game = this.gameStore.getGame(roomCode);
-    if (!game) return;
+    if (!game || game.phase !== 'credits') return;
 
     game.phase = 'waiting';
-    game.currentNodeId = 'start';
+    this.storyEngine.resetRun(game);
     game.creditsStartedAt = undefined;
     game.creditsDurationMs = undefined;
     game.playerRotation = {};
     game.lastActivePlayerId = undefined;
 
+    this.broadcastStory(roomCode);
     this.broadcastState(roomCode);
   }
 
   private restartGame(roomCode: string) {
     const game = this.gameStore.getGame(roomCode);
     if (!game) return;
+    this.clearRoomTimers(roomCode);
+    this.kickedPlayers.delete(game);
 
     this.logger.log(`Restarting the Highlands: ${roomCode}`);
 
@@ -2115,14 +3215,22 @@ export class GameGateway {
         player.statusEffects = [];
         player.skillCharges = undefined;
         player.healCharges = undefined;
+        player.battleItems = undefined;
+        player.companion = undefined;
       }
     }
 
     game.playerRotation = {};
     game.lastActivePlayerId = undefined;
     game.phase = 'waiting';
-    game.currentNodeId = 'start';
-    game.currentTeamId = 'ravens';
+    game.paused = false;
+    if (game.encounterPath) {
+      game.encounterPath = createEncounterPath(game.adventure);
+      if (game.adventure) game.adventureQuest = createAdventureQuest();
+      game.openingEnemy = game.encounterPath.levels[0].name;
+    }
+    this.storyEngine.resetRun(game);
+    game.currentTeamId = game.battleMode ? game.currentTeamId : 'ravens';
     game.activePlayerId = undefined;
     game.battle = undefined;
     game.pendingNextNodeId = undefined;
@@ -2130,9 +3238,11 @@ export class GameGateway {
     game.creditsStartedAt = undefined;
     game.creditsDurationMs = undefined;
 
-    this.seenCutscenes.clear();
-    this.lastCutsceneNodeId = null;
-    this.activeCutsceneId = null;
+    if (!game.battleMode) {
+      this.seenCutscenes.clear();
+      this.lastCutsceneNodeId = null;
+      this.activeCutsceneId = null;
+    }
 
     this.broadcastStory(roomCode);
     this.broadcastState(roomCode);

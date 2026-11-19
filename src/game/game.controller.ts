@@ -1,4 +1,4 @@
-import { Body, Controller, Get } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 
 import { StoryEngine } from './engines/story.engine';
 
@@ -7,7 +7,7 @@ export class GameController {
   constructor(private readonly storyEngine: StoryEngine) {}
 
   /**
-   * Static story content is loaded once by the frontend. During play, the
+   * Story content is loaded once by the frontend. During play, the
    * websocket state identifies the active entry with `currentNodeId`.
    */
   @Get('api/story')

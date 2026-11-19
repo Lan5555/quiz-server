@@ -1,0 +1,50 @@
+{
+  "initialNodeId": "start",
+  "nodes": {
+    "start": {
+      "id": "start",
+      "title": "The gate beneath the mist",
+      "text": "An iron bell rings once. The gate opens just wide enough for someone to pass.",
+      "background": "/images/cathedral.jpg",
+      "choices": [
+        {
+          "id": "follow_the_bell",
+          "text": "Follow the sound of the bell",
+          "result": "safe",
+          "nextNodeId": "sanctum"
+        },
+        {
+          "id": "challenge_guardian",
+          "text": "Challenge the gate guardian",
+          "result": "battle",
+          "enemyName": "Gate Guardian",
+          "enemyHp": 1400,
+          "enemyAttack": 120,
+          "enemyAbilities": ["rend", "sweep"],
+          "nextNodeId": "sanctum"
+        }
+      ]
+    },
+    "sanctum": {
+      "id": "sanctum",
+      "title": "Quiet at last",
+      "text": "The bell falls silent. For the first time, the Highlands let you hear the wind.",
+      "onEnter": {
+        "id": "sanctum_arrival",
+        "once": true,
+        "lines": [
+          {
+            "id": "first_line",
+            "speaker": "The Archivist",
+            "text": "Leave the gate open for the next travelers.",
+            "duration": 3000,
+            "tone": "quiet"
+          }
+        ]
+      },
+      "choices": [
+        { "id": "finish", "text": "Finish the chapter", "result": "credits" }
+      ]
+    }
+  }
+}

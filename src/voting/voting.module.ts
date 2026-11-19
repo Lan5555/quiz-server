@@ -7,6 +7,7 @@ import { PurchasesModule } from './purchases/purchases.module';
 import { VotingPaymentsModule } from './payments/voting-payments.module';
 import { VotingController, VotingWebhookController } from './voting.controller';
 import { VotingImagesModule } from './images/images.module';
+import { GameCheckoutModule } from '../game/payments/game-checkout.module';
 @Module({
   imports: [
     VotingCoreModule,
@@ -16,6 +17,7 @@ import { VotingImagesModule } from './images/images.module';
     PurchasesModule,
     VotingPaymentsModule,
     VotingImagesModule,
+    GameCheckoutModule,
   ],
   controllers: [VotingController, VotingWebhookController],
 })

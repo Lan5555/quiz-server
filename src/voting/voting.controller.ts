@@ -27,6 +27,7 @@ import { PollsService } from './polls/polls.service';
 import { CandidatesService } from './candidates/candidates.service';
 import { PurchasesService } from './purchases/purchases.service';
 import { VotingWebhooksService } from './payments/voting-webhooks.service';
+import { GameCheckoutService } from '../game/payments/game-checkout.service';
 @Controller('votes/api')
 @UseFilters(VotingExceptionFilter)
 @UseGuards(VotingRateGuard)
@@ -88,14 +89,19 @@ export class VotingController {
 @Controller('votes/api/webhooks')
 @UseFilters(VotingExceptionFilter)
 export class VotingWebhookController {
-  constructor(private readonly webhooks: VotingWebhooksService) {}
+  constructor(
+    private readonly webhooks: VotingWebhooksService,
+    private readonly gameCheckout: GameCheckoutService,
+  ) {}
   @Post('flutterwave')
   @HttpCode(200)
   async webhook(
     @Req() req: RawBodyRequest<Request>,
     @Headers('verif-hash') signature: string,
   ) {
-    await this.webhooks.accept(req.rawBody, signature);
+    if (!(await this.gameCheckout.routeWebhook(req.rawBody, signature))) {
+      await this.webhooks.accept(req.rawBody, signature);
+    }
     return ok(null, 'Webhook queued');
   }
 }

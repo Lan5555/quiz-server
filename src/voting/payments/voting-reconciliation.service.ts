@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryFailedError } from 'typeorm';
 import axios from 'axios';
 import { VoteAccountingService } from './vote-accounting.service';
 import { VotingConfig } from '../common/voting';
@@ -111,12 +111,14 @@ export class VotingReconciliationService {
       WHERE purchase_id IN (SELECT purchase_id FROM voting_email_outbox WHERE sent_at IS NULL AND next_attempt_at<=now() ORDER BY next_attempt_at LIMIT 10 FOR UPDATE SKIP LOCKED) RETURNING purchase_id) SELECT * FROM claimed`),
     );
     for (const row of rows) {
+      let stage = 'load_purchase';
       try {
         const [p] = await this.db.query<PurchaseRecord[]>(
           `SELECT * FROM vote_purchases WHERE id=$1`,
           [row.purchase_id],
         );
         if (p.status !== 'PAID') continue;
+        stage = 'send_to_brevo';
         await axios.post(
           'https://api.brevo.com/v3/smtp/email',
           {
@@ -131,12 +133,29 @@ export class VotingReconciliationService {
             maxRedirects: 0,
           },
         );
+        stage = 'mark_sent';
         await this.db.query(
           `UPDATE voting_email_outbox SET sent_at=now() WHERE purchase_id=$1`,
           [p.id],
         );
-      } catch {
-        this.logger.warn('Voting receipt email remains queued');
+      } catch (error) {
+        let reason = 'unexpected_error';
+        if (axios.isAxiosError(error)) {
+          reason = error.response
+            ? `HTTP ${error.response.status}`
+            : error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT'
+              ? 'request_timeout'
+              : 'transport_error';
+        } else if (error instanceof QueryFailedError) {
+          const code: unknown = error.driverError.code;
+          reason =
+            typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)
+              ? `SQLSTATE=${code}`
+              : 'database_error';
+        }
+        this.logger.warn(
+          `Voting receipt email remains queued: stage=${stage} reason=${reason}`,
+        );
       }
     }
   }

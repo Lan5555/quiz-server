@@ -1,4 +1,12 @@
+import type { CombatKit } from './engines/fighter-combat';
 import { RoomSummary } from './game.store';
+import {
+  PREMIUM_FIGHTERS,
+  type Loadout,
+  type ItemId,
+  type PremiumFighterId,
+} from './progression/catalog';
+import type { CompanionSkillId } from './progression/companion-skills';
 
 /* ================================================================== */
 /* Core primitives                                                     */
@@ -6,16 +14,41 @@ import { RoomSummary } from './game.store';
 
 export type TeamId = 'ravens' | 'wolves' | 'dragons' | 'serpents';
 
-export type CombatAction = 'attack' | 'skill' | 'heal' | 'block' | 'dodge';
+export type CombatAction =
+  | 'attack'
+  | 'skill'
+  | 'heal'
+  | 'block'
+  | 'dodge'
+  | 'item'
+  | 'limit';
 
 export type SkillId =
   | 'shadow_strike'
   | 'blood_rage'
   | 'fire_burst'
-  | 'void_blast';
+  | 'void_blast'
+  | 'iron_cleave'
+  | 'dawnstrike'
+  | 'spirit_palm'
+  | 'astral_bind'
+  | 'blacksteel_rebuke'
+  | 'sunbrand'
+  | 'bellstroke'
+  | 'riposte'
+  | 'thunder_kata'
+  | 'hex_lance'
+  | 'cinderstep'
+  | 'eclipse_sigil';
 
-export type HealId = 'minor_heal' | 'major_heal';
-export type CombatVariant = SkillId | HealId;
+export type HealId = 'signature_recovery' | 'field_recovery';
+export type CombatVariant =
+  | SkillId
+  | HealId
+  | ItemId
+  | CompanionSkillId
+  | 'minor_heal'
+  | 'major_heal';
 
 export type PlayerStatus = 'alive' | 'eliminated' | 'defeated' | 'spectator';
 
@@ -38,7 +71,10 @@ export type StatusId =
   | 'guarded'
   | 'evading'
   | 'enraged'
-  | 'blessed';
+  | 'blessed'
+  | 'poisoned'
+  | 'burning'
+  | 'cursed';
 
 export interface StatusEffect {
   id: StatusId;
@@ -49,7 +85,29 @@ export interface StatusEffect {
 /* Player and team                                                     */
 /* ================================================================== */
 
+export const ROOM_ARENAS = [
+  'moonlit-observatory',
+  'ember-citadel',
+  'verdant-sanctum',
+  'ashen-cathedral',
+  'eclipse-throne',
+] as const;
+export type ArenaId = (typeof ROOM_ARENAS)[number];
+
+export const ROOM_FIGHTERS = [
+  'knight',
+  'maiden',
+  'warden',
+  'duelist',
+  'monk',
+  'arcanist',
+  ...(Object.keys(PREMIUM_FIGHTERS) as PremiumFighterId[]),
+] as const;
+export type FighterId = (typeof ROOM_FIGHTERS)[number];
+
 export interface Player {
+  fighterId?: FighterId;
+  combatKit?: CombatKit;
   id: string;
   name: string;
   teamId: TeamId;
@@ -58,12 +116,22 @@ export interface Player {
   status: PlayerStatus;
   ready: boolean;
   connected: boolean;
+  loadout?: Loadout;
+  focus?: number;
   breakMeter?: number;
   statusEffects?: StatusEffect[];
   /** Remaining skill uses this battle. Reset when a battle starts. */
   skillCharges?: number;
   /** Remaining heal uses this battle. Reset when a battle starts. */
   healCharges?: number;
+  battleItems?: Partial<Record<ItemId, number>>;
+  companion?: {
+    skillId: CompanionSkillId;
+    name: string;
+    sprite: 'gate-warden' | 'hollow-specter' | 'echo-beast';
+    remaining: number;
+    strikes: number;
+  };
 }
 
 export interface Team {
@@ -191,6 +259,11 @@ export interface CpuBattle {
   enemyHp: number;
   enemyMaxHp: number;
   enemyAttack: number;
+  enemyStatusEffects?: StatusEffect[];
+  encounterId?: string;
+  enemyUnits?: CpuBattle[];
+  lastTactic?: CpuAbilityId;
+  lastMendRound?: number;
   round: number;
   intro?: Cutscene;
   victory?: Cutscene;
@@ -230,8 +303,30 @@ export type GamePhase =
   | 'battle'
   | 'credits';
 
+export type EncounterPathChoice = 'replay' | 'higher' | 'resume' | 'save';
+
+export interface EncounterPath {
+  index: number;
+  status: 'active' | 'cleared' | 'defeated';
+  tier?: number;
+  savedWins?: 6 | 12;
+  nextTier?: number;
+  completionReward?: { cinders: number; xp: number };
+  savePending?: boolean;
+  levels: { id: string; name: string; hint: string; allies?: { id: string; name: string }[] }[];
+}
+
+export type AdventureInteraction = 'talk' | 'collect' | 'rune';
+export interface AdventureQuest {
+  accepted: boolean;
+  progress: string[];
+  ready: boolean;
+  incorrect?: boolean;
+}
+
 export interface GameState {
   roomCode: string;
+  paused?: boolean;
   phase: GamePhase;
   currentNodeId: string;
   currentTeamId: TeamId;
@@ -253,10 +348,16 @@ export interface GameState {
 
   /** Which kind of fight this room hosts. Undefined = story room. */
   battleMode?: RoomBattleMode;
+  arenaId?: ArenaId;
+  openingEnemy?: string;
+  encounterPath?: EncounterPath;
+  adventure?: boolean;
+  adventureQuest?: AdventureQuest;
 
   /** The player who created the room. */
   hostPlayerId?: string;
   teamCap?: number;
+  startingHp?: number;
 }
 
 /* ================================================================== */
@@ -286,6 +387,9 @@ export type GameEvent =
       teamId: TeamId;
       battleMode: RoomBattleMode;
       enemyName?: string;
+      adventure?: boolean;
+      startingHp?: number;
+      arenaId?: ArenaId;
     }
   | {
       type: 'ROOM_CREATED';
@@ -297,6 +401,11 @@ export type GameEvent =
       type: 'ROOM_NOT_FOUND';
       roomCode: string;
     }
+  | { type: 'ROOM_REMOVED'; roomCode: string }
+  | { type: 'SELECT_FIGHTER'; playerId: string; fighterId: FighterId }
+  | { type: 'START_CPU'; playerId: string; pathChoice?: EncounterPathChoice }
+  | { type: 'BEGIN_ADVENTURE'; playerId: string }
+  | { type: 'ADVENTURE_INTERACT'; playerId: string; chapter: number; action: AdventureInteraction; target?: string }
   | {
       type: 'START_PVP';
       playerId: string;
@@ -355,6 +464,7 @@ export type GameEvent =
   | {
       type: 'ROOM_PLAYER_READY';
       playerId: string;
+      ready?: boolean;
     }
   | {
       type: 'ADMIN_APPROVE_ROOM';
@@ -414,6 +524,9 @@ export type GameEvent =
   | { type: 'ROUND_TIMER'; remainingMs: number }
   | { type: 'CREDITS'; durationMs?: number; startedAt?: number }
   | { type: 'CREDITS_DONE' }
+  | { type: 'SET_STARTING_HP'; playerId: string; hp: number; targetId?: string }
+  | { type: 'REFRESH_LOADOUT'; playerId: string }
+  | { type: 'PROFILE_UPDATED' }
   | {
       type: 'SET_TEAM_CAP';
       playerId: string;

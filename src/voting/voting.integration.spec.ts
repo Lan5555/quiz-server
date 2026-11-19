@@ -249,6 +249,51 @@ describe('paid voting PostgreSQL integration', () => {
         .length,
     ).toBe(1);
   });
+  it('logs a Brevo rejection safely and retries the queued receipt', async () => {
+    const { p } = await buy();
+    await accounting.apply(p.id, transaction(p));
+    const worker = new VotingReconciliationService(
+      db,
+      accounting,
+      new VotingConfig(
+        new ConfigService({
+          VOTING_RECONCILIATION_ENABLED: 'true',
+          BREVO_API_KEY: 'test-api-key',
+          BREVO_SENDER: 'sender@example.test',
+        }),
+      ),
+    );
+    const send = jest.spyOn(axios, 'post').mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 403, data: 'test provider response' },
+    });
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const outbox = () =>
+      run(
+        'SELECT attempts, sent_at FROM voting_email_outbox WHERE purchase_id=$1',
+        [p.id],
+      );
+    try {
+      await worker.tick();
+      expect(warn).toHaveBeenCalledWith(
+        'Voting receipt email remains queued: stage=send_to_brevo reason=HTTP 403',
+      );
+      expect(await outbox()).toEqual([{ attempts: 1, sent_at: null }]);
+
+      send.mockResolvedValue({ status: 201 });
+      await run(
+        'UPDATE voting_email_outbox SET next_attempt_at=now() WHERE purchase_id=$1',
+        [p.id],
+      );
+      await worker.tick();
+      expect(await outbox()).toEqual([
+        { attempts: 2, sent_at: expect.any(Date) },
+      ]);
+    } finally {
+      send.mockRestore();
+      warn.mockRestore();
+    }
+  });
   it('replays the same checkout and receipt capability even after poll closes', async () => {
     const { p, checkout, key } = await buy();
     await polls.status(poll.id, 'CLOSED', admin);
