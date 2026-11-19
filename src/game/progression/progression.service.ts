@@ -22,6 +22,7 @@ import type { GearId, ItemId, Loadout, PremiumFighterId } from './catalog';
 import {
   COMPANION_SKILLS,
   companionSkillDescription,
+  DUAL_SUMMON_PRODUCT,
   isCompanionSkill,
   type CompanionSkillId,
 } from './companion-skills';
@@ -90,6 +91,7 @@ export class ProgressionService {
             name: skill.name,
             fighter: skill.fighter,
             price: skill.price,
+            role: skill.role,
             description: companionSkillDescription(id as CompanionSkillId),
           },
         ]),
@@ -126,8 +128,8 @@ export class ProgressionService {
   }
 
   async roomLoadout(id: string): Promise<Loadout> {
-    const [account] = await this.db.query<{ loadout: Loadout; xp: number }[]>(
-      'SELECT loadout,xp FROM game_accounts WHERE id=$1',
+    const [account] = await this.db.query<{ loadout: Loadout; xp: number; gear: string[] }[]>(
+      'SELECT loadout,xp,gear FROM game_accounts WHERE id=$1',
       [id],
     );
     if (!account) throw new NotFoundException('Game account not found.');
@@ -140,6 +142,7 @@ export class ProgressionService {
     return {
       ...account.loadout,
       ...(unlockedSkills.length ? { unlockedSkills } : {}),
+      summonCapacity: account.gear.includes(DUAL_SUMMON_PRODUCT) ? 2 : undefined,
       equippedItem,
       strength: { attack, defense, speed },
     };
@@ -268,10 +271,10 @@ export class ProgressionService {
     return rows.length > 0;
   }
 
-  async encounterCheckpoint(id: string, tx = this.db.manager) {
+  async encounterCheckpoint(id: string, tier?: number, tx = this.db.manager) {
     const [checkpoint] = await tx.query<EncounterCheckpoint[]>(
-      'SELECT tier, cleared, levels FROM game_encounter_checkpoints WHERE account_id=$1',
-      [id],
+      'SELECT tier, cleared, levels FROM game_encounter_checkpoints WHERE account_id=$1 AND ($2::int IS NULL OR tier=$2) ORDER BY tier DESC LIMIT 1',
+      [id, tier ?? null],
     );
     return checkpoint;
   }
@@ -282,17 +285,19 @@ export class ProgressionService {
       // The account lock also covers a player's first checkpoint, before a row exists.
       const [account] = await tx.query<{ id: string }[]>('SELECT id FROM game_accounts WHERE id=$1 FOR UPDATE', [id]);
       if (!account) throw new NotFoundException('Game account not found.');
-      const previous = await this.encounterCheckpoint(id, tx);
-      if (previous && previous.tier > tier) return {};
-      if (previous?.tier === tier && previous.cleared >= cleared) return { savedWins: previous.cleared };
-      if (tier !== (previous?.tier ?? 1) && (previous?.cleared !== 12 || tier !== previous.tier + 1)) {
+      const previous = await this.encounterCheckpoint(id, tier, tx);
+      if (previous && previous.cleared >= cleared) return { savedWins: previous.cleared };
+      const highest = await this.encounterCheckpoint(id, undefined, tx);
+      const unlockedTier = highest ? highest.tier + (highest.cleared === 12 ? 1 : 0) : 1;
+      if (tier > unlockedTier) {
         throw new ConflictException('Clear the current difficulty before saving a higher tier.');
       }
       await tx.query(`
         INSERT INTO game_encounter_checkpoints (account_id, tier, cleared, levels) VALUES ($1,$2,$3,$4::jsonb)
-        ON CONFLICT (account_id) DO UPDATE SET tier=EXCLUDED.tier, cleared=EXCLUDED.cleared, levels=EXCLUDED.levels
+        ON CONFLICT (account_id, tier) DO UPDATE SET tier=EXCLUDED.tier, cleared=EXCLUDED.cleared, levels=EXCLUDED.levels
       `, [id, tier, cleared, JSON.stringify(path.levels)]);
-      if (cleared === 6) return { savedWins: cleared };
+      // Older accounts saved only their highest tier. Earlier tiers were already rewarded.
+      if (cleared === 6 || (highest && tier < highest.tier)) return { savedWins: cleared };
       const reward = ENCOUNTER_COMPLETION_REWARD;
       const [updated] = await tx.query<{ xp: number }[]>(
         'UPDATE game_accounts SET credits=credits+$2,xp=xp+$3 WHERE id=$1 RETURNING xp',

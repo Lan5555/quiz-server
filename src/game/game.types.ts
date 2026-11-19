@@ -6,7 +6,7 @@ import {
   type ItemId,
   type PremiumFighterId,
 } from './progression/catalog';
-import type { CompanionSkillId } from './progression/companion-skills';
+import type { CompanionRole, CompanionSkillId } from './progression/companion-skills';
 
 /* ================================================================== */
 /* Core primitives                                                     */
@@ -125,12 +125,14 @@ export interface Player {
   /** Remaining heal uses this battle. Reset when a battle starts. */
   healCharges?: number;
   battleItems?: Partial<Record<ItemId, number>>;
+  secondaryCompanion?: Player['companion'];
   companion?: {
     skillId: CompanionSkillId;
     name: string;
     sprite: 'gate-warden' | 'hollow-specter' | 'echo-beast';
     remaining: number;
     strikes: number;
+    role?: CompanionRole;
   };
 }
 
@@ -260,10 +262,13 @@ export interface CpuBattle {
   enemyMaxHp: number;
   enemyAttack: number;
   enemyStatusEffects?: StatusEffect[];
+  enemyBreakMeter?: number;
   encounterId?: string;
   enemyUnits?: CpuBattle[];
   lastTactic?: CpuAbilityId;
   lastMendRound?: number;
+  enemyFocus?: number;
+  enemyItems?: { tonic: number; ward: number };
   round: number;
   intro?: Cutscene;
   victory?: Cutscene;

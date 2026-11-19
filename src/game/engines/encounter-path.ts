@@ -72,7 +72,9 @@ export function createEncounterPath(adventure = false, tier = 1, previousFirst?:
     status: 'active',
     ...(adventure ? {} : { tier }),
     levels: lineup.map(({ id, name, hint }, index) => {
-      const count = adventure || index < 2 && tier === 1 ? 0 : index % 4 === 3 ? 2 : 1;
+      const count = adventure || index < 2 && tier === 1
+        ? 0
+        : index % 4 === 3 || (tier >= 3 && index % 3 === 2) ? 2 : 1;
       const allies = Array.from({ length: count }, (_, offset) => {
         const ally = lineup[(index + 3 + offset * 4) % lineup.length];
         return { id: ally.id, name: ally.name };

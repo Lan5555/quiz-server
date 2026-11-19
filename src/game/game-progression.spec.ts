@@ -1,3 +1,4 @@
+import { EmbracePerTierCheckpoints1795392000000 } from '../migrations/1795392000000-EmbracePerTierCheckpoints';
 import { EmbraceEncounterCheckpoints1795305600000 } from '../migrations/1795305600000-EmbraceEncounterCheckpoints';
 import { PGlite } from '@electric-sql/pglite';
 import { randomUUID } from 'node:crypto';
@@ -48,6 +49,7 @@ describe('Embrace progression PostgreSQL integration', () => {
     await new EmbraceFighters1795132800000().up(runner);
     await new EmbraceShopAndExperience1795219200000().up(runner);
     await new EmbraceEncounterCheckpoints1795305600000().up(runner);
+    await new EmbracePerTierCheckpoints1795392000000().up(runner);
   }, 15000);
 
   afterAll(() => pg.close());
@@ -616,7 +618,7 @@ describe('Embrace progression PostgreSQL integration', () => {
     expect(flank.enemyHp).toBe(0);
     expect(leader.enemyHp).toBe(leaderHp);
     expect(party.status).toBe('active');
-    engine.cpuRetaliate(practice, party);
+    Array.from(engine.cpuRetaliate(practice, party));
     expect(party.log.slice(-3).some((line) => line.startsWith(leader.enemyName))).toBe(true);
     player.status = 'alive';
     player.hp = player.maxHp;
@@ -624,6 +626,27 @@ describe('Embrace progression PostgreSQL integration', () => {
     engine.performAction(practice, player, 'attack', undefined, leader.id);
     expect(party).toMatchObject({ status: 'victory', enemyHp: 0 });
     gateway['endBattleAndAdvance'](practice);
+
+    for (let i = 1; i < 6; i++) {
+      await submit(hostClient, { type: 'START_CPU', playerId: host.id });
+      gateway['clearRoundTimeout'](practice.roomCode);
+      const encounter = practice.battle;
+      if (encounter?.mode !== 'cpu') throw new Error('Missing Tier 2 encounter');
+      encounter.enemyHp = 0;
+      encounter.status = 'victory';
+      await gateway['finishRound'](practice);
+      if (i < 5) expect(await progression.encounterCheckpoint(host.id, 2)).toBeUndefined();
+    }
+    expect(await progression.encounterCheckpoint(host.id, 1)).toMatchObject({ tier: 1, cleared: 12, levels });
+    expect(await progression.encounterCheckpoint(host.id)).toMatchObject({ tier: 2, cleared: 6 });
+    expect(await gateway['resumePath'](host.id)).toMatchObject({ index: 6, tier: 2, levels: practice.encounterPath!.levels });
+    await progression.saveEncounterCheckpoint(host.id, practice.encounterPath!, 12);
+    practice.encounterPath!.status = 'cleared';
+    practice.encounterPath!.nextTier = 3;
+    practice.phase = 'ended';
+    await submit(hostClient, { type: 'START_CPU', playerId: host.id, pathChoice: 'higher' });
+    expect(practice.encounterPath).toMatchObject({ tier: 3, status: 'active', index: 0 });
+    expect(practice.encounterPath!.levels[2].allies).toHaveLength(2);
 
     await submit(hostClient, {
       type: 'CREATE_ROOM',
@@ -854,6 +877,199 @@ describe('Embrace loadouts in combat', () => {
     expect(battle.log.at(-1)).toContain('Aether Wraith struck Echo Beast for 155 damage');
     expect(battle.enemyHp).toBe(before - 155);
     expect(player.companion?.strikes).toBe(1);
+  });
+
+  it.each(['attack', 'ability', 'signature', 'no break'] as const)(
+    'resolves CPU retaliation and the break follow-up for %s',
+    (move) => {
+      const game = new GameStore().createRoom('cpu-break');
+      const player: Player = {
+        id: 'vanguard',
+        name: 'Vanguard',
+        teamId: 'ravens',
+        hp: 1000,
+        maxHp: 1000,
+        ready: true,
+        connected: true,
+        status: 'alive',
+      };
+      game.teams.ravens.players.push(player);
+      const engine = new CombatEngine();
+      const battle = engine.createCpuBattle(game, 'ravens', 'Echo Beast', 1000, 1000, {
+        attack: 180,
+        abilityChance: move === 'ability' ? 1 : 0,
+        abilities: ['rend'],
+        signatureEveryNRounds: move === 'signature' ? 1 : 0,
+      });
+      game.battle = battle;
+      const shouldBreak = move !== 'no break';
+      player.breakMeter = shouldBreak ? 199 : 0;
+      const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+      try {
+        const retaliation = engine.cpuRetaliate(game, battle);
+        expect(retaliation.next().done).toBe(!shouldBreak);
+        const hpAfterFirstHit = player.hp;
+        expect(hpAfterFirstHit).toBeLessThan(player.maxHp);
+        expect(battle.log).not.toContain('Echo Beast attacks again after the break!');
+        if (shouldBreak) {
+          expect(battle.log).toContain('Vanguard is BROKEN!');
+          expect(retaliation.next().done).toBe(true);
+          expect(player.hp).toBeLessThan(hpAfterFirstHit);
+          expect(player.statusEffects?.some(({ id }) => id === 'immobilized')).toBe(false);
+          expect(battle.log.filter((line) => line === 'Echo Beast attacks again after the break!')).toHaveLength(1);
+        }
+        expect(battle).toMatchObject({ status: 'active', round: 2 });
+      } finally {
+        random.mockRestore();
+      }
+    },
+  );
+
+  it('restricts a second distinct summon to the paid slot and supports healer and buffer roles', () => {
+    const game = new GameStore().createRoom('dual-companions');
+    const player: Player = {
+      id: 'caster', name: 'Caster', teamId: 'ravens', fighterId: 'arcanist',
+      hp: 1000, maxHp: 1000, ready: true, connected: true, status: 'alive',
+      loadout: { ...STARTER_LOADOUT, unlockedSkills: ['call_aether_wraith_healer', 'call_aether_wraith_buffer'] },
+    };
+    game.teams.ravens.players.push(player);
+    const engine = new CombatEngine();
+    game.battle = engine.createCpuBattle(game, 'ravens', 'Echo Beast', 1000, 1000);
+    engine.performAction(game, player, 'skill', 'call_aether_wraith_healer');
+    expect(() => engine.performAction(game, player, 'skill', 'call_aether_wraith_buffer')).toThrow('slots');
+    player.loadout!.summonCapacity = 2;
+    expect(() => engine.performAction(game, player, 'skill', 'call_aether_wraith_healer')).toThrow('already summoned');
+    engine.performAction(game, player, 'skill', 'call_aether_wraith_buffer');
+    player.hp = 800;
+    engine.resolveCompanions(game);
+    expect(player.hp).toBe(890);
+    expect(player.statusEffects).toContainEqual({ id: 'enraged', turns: 3 });
+    expect(player.secondaryCompanion?.strikes).toBe(1);
+  });
+
+  it('builds break pressure per enemy and gives one follow-up to the fighter who breaks it', () => {
+    const game = new GameStore().createRoom('enemy-break');
+    const player: Player = {
+      id: 'fighter', name: 'Fighter', teamId: 'ravens', hp: 1500, maxHp: 1500,
+      ready: true, connected: true, status: 'alive',
+    };
+    game.teams.ravens.players.push(player);
+    const engine = new CombatEngine();
+    const battle = engine.createEncounterBattle(game, 'ravens', ['Lead', 'Flank'].map((name) => ({
+      id: name.toLowerCase(), name, hint: '', hp: 2400, attack: 145,
+      personality: 'strategic', abilities: [], signatureEveryNRounds: 0, signatureMultiplier: 1,
+    })));
+    game.battle = battle;
+    const [lead, flank] = battle.enemyUnits!;
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      for (let hit = 1; hit <= 4; hit++) {
+        engine.performAction(game, player, 'attack', undefined, flank.id);
+        expect(flank.enemyBreakMeter).toBe(hit * 40);
+        expect(engine.resolvePlayerBreak(game, player)).toBe(false);
+      }
+      engine.performAction(game, player, 'attack', undefined, flank.id);
+      expect(flank.enemyStatusEffects).toContainEqual({ id: 'immobilized', turns: 1 });
+      expect(lead.enemyBreakMeter).toBeUndefined();
+      const hp = flank.enemyHp;
+      const focus = player.focus;
+      expect(engine.resolvePlayerBreak(game, { ...player, id: 'another' })).toBe(false);
+      expect(engine.resolvePlayerBreak(game, player)).toBe(true);
+      expect(flank.enemyHp).toBeLessThan(hp);
+      expect(flank.enemyStatusEffects).toEqual([]);
+      expect(flank.enemyBreakMeter).toBe(0);
+      expect(lead.enemyHp).toBe(lead.enemyMaxHp);
+      expect(player.focus).toBe(focus);
+      expect(engine.resolvePlayerBreak(game, player)).toBe(false);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('ends a battle when the break follow-up defeats its last enemy', () => {
+    const game = new GameStore().createRoom('break-victory');
+    const player: Player = {
+      id: 'fighter', name: 'Fighter', teamId: 'ravens', hp: 1000, maxHp: 1000,
+      ready: true, connected: true, status: 'alive',
+    };
+    game.teams.ravens.players.push(player);
+    const engine = new CombatEngine();
+    const battle = engine.createCpuBattle(game, 'ravens', 'Beast', 1000, 1000);
+    game.battle = battle;
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      engine.performAction(game, player, 'attack');
+      const attackDamage = 1000 - battle.enemyHp;
+      battle.enemyHp = attackDamage + 1;
+      battle.enemyBreakMeter = 199;
+      engine.performAction(game, player, 'attack');
+      expect(battle.enemyHp).toBe(1);
+      expect(engine.resolvePlayerBreak(game, player)).toBe(true);
+      expect(battle).toMatchObject({ status: 'victory', enemyHp: 0 });
+      expect(battle.log.at(-1)).toBe('Beast has been destroyed.');
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('lets an encounter enemy pick a healing item, a buff spell and a Limit Break', () => {
+    const game = new GameStore().createRoom('enemy-tools');
+    const player: Player = {
+      id: 'fighter', name: 'Fighter', teamId: 'ravens',
+      hp: 1500, maxHp: 1500, ready: true, connected: true, status: 'alive',
+    };
+    game.teams.ravens.players.push(player);
+    const engine = new CombatEngine();
+    const battle = engine.createEncounterBattle(game, 'ravens', [{
+      id: 'tactician', name: 'Tactician', hint: '', hp: 1000, attack: 145,
+      personality: 'strategic', abilities: [], signatureEveryNRounds: 0, signatureMultiplier: 1,
+    }]);
+    game.battle = battle;
+    battle.enemyHp = 200;
+    Array.from(engine.cpuRetaliate(game, battle));
+    expect(battle.enemyHp).toBe(400);
+    expect(battle.enemyItems?.tonic).toBe(0);
+    player.statusEffects = [{ id: 'guarded', turns: 3 }];
+    Array.from(engine.cpuRetaliate(game, battle));
+    expect(battle.enemyStatusEffects).toContainEqual({ id: 'enraged', turns: 3 });
+    battle.enemyFocus = 100;
+    const retaliation = engine.cpuRetaliate(game, battle);
+    expect(retaliation.next()).toMatchObject({ value: 2000, done: false });
+    expect(battle.log.some((line) => line.includes('Tactician unleashed a Limit Break on Fighter'))).toBe(true);
+    expect(battle.enemyFocus).toBe(0);
+    expect(retaliation.next().done).toBe(true);
+  });
+
+  it('resolves group attacks separately and dismisses a fallen summoner', () => {
+    const game = new GameStore().createRoom('group-attacks');
+    const player: Player = {
+      id: 'caster', name: 'Caster', teamId: 'ravens', fighterId: 'arcanist',
+      hp: 1000, maxHp: 1000, ready: true, connected: true, status: 'alive',
+      loadout: { ...STARTER_LOADOUT, unlockedSkills: ['call_aether_wraith'] },
+    };
+    game.teams.ravens.players.push(player);
+    const engine = new CombatEngine();
+    const group = engine.createEncounterBattle(game, 'ravens', ['Lead', 'Flank'].map((name) => ({
+      id: name.toLowerCase(), name, hint: '', hp: 1000, attack: 145,
+      personality: 'strategic', abilities: [], signatureEveryNRounds: 0, signatureMultiplier: 1,
+    })));
+    game.battle = group;
+    engine.performAction(game, player, 'skill', 'call_aether_wraith');
+    expect(player.companion).toBeDefined();
+    player.hp = 140;
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const retaliation = engine.cpuRetaliate(game, group);
+      expect(retaliation.next().done).toBe(false);
+      expect(player.hp).toBeGreaterThan(0);
+      expect(group.log.at(-1)).toContain('Lead hits Caster');
+      expect(retaliation.next().done).toBe(true);
+      expect(player).toMatchObject({ status: 'eliminated', hp: 0 });
+      expect(player.companion).toBeUndefined();
+      expect(group.status).toBe('defeat');
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it('carries Guard into the opposing turn and spends Focus on a Limit Break', () => {

@@ -23,7 +23,10 @@ import {
   isPremiumFighter,
 } from '../progression/catalog';
 
+import { DUAL_SUMMON_PRODUCT } from '../progression/companion-skills';
+
 const PRODUCTS = {
+  [DUAL_SUMMON_PRODUCT]: { name: 'Dual Summoning', amountMinor: 400_000 },
   ashblade: { name: GEAR.ashblade.name, amountMinor: 200_000 },
   bellwarden_mail: { name: GEAR.bellwarden_mail.name, amountMinor: 200_000 },
   bloodleaf_tonic: { name: ITEMS.bloodleaf_tonic.name, amountMinor: 50_000 },
@@ -83,9 +86,11 @@ export class GameCheckoutService {
     return {
       enabled: this.settings.get('GAME_CASH_CHECKOUT_ENABLED') === 'true',
       currency: 'NGN',
-      offers: (Object.keys(PRODUCTS) as PaidProductId[]).filter((id) => !LEGACY_OFFERS.has(id)).map((gearId) => ({
+      offers: (Object.keys(PRODUCTS) as PaidProductId[])
+        .filter((id) => !LEGACY_OFFERS.has(id))
+        .map((gearId) => ({
         gearId,
-        kind: isPremiumFighter(gearId)
+        kind: gearId === DUAL_SUMMON_PRODUCT ? 'summon' : isPremiumFighter(gearId)
           ? 'fighter'
           : isCinderBundle(gearId)
             ? 'cinders'

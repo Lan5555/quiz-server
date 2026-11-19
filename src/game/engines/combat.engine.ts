@@ -83,7 +83,8 @@ function roll(min: number, max: number) {
 }
 
 export class CombatEngine {
-  private brokeThisAction = false;
+  private readonly teamBreaks = new WeakSet<TeamBattle>();
+  private readonly enemyBreaks = new WeakMap<CpuBattle, { enemy: CpuBattle; playerId: string }>();
 
   /* ------------------------------------------------------------------ */
   /* Creation                                                            */
@@ -172,10 +173,14 @@ export class CombatEngine {
     const options = { abilityChance: 0.68, telegraphs: true };
     const battle = this.createCpuBattle(game, teamId, lead.name, lead.hp, lead.hp, { ...lead, ...options });
     battle.encounterId = lead.id;
+    battle.enemyItems = { tonic: 1, ward: 1 };
+    battle.enemyFocus = 0;
     if (opponents.length > 1) {
       battle.enemyUnits = opponents.map((enemy) => {
         const unit = this.makeCpuBattle(teamId, enemy.name, enemy.hp, enemy.hp, { ...enemy, ...options });
         unit.encounterId = enemy.id;
+        unit.enemyItems = { tonic: 1, ward: 1 };
+        unit.enemyFocus = 0;
         unit.log = [];
         return unit;
       });
@@ -249,6 +254,7 @@ export class CombatEngine {
         p.combatKit = presentCombatKit(p.fighterId, p.loadout?.unlockedSkills);
         p.battleItems = starterBattleItems(p.fighterId);
         p.companion = undefined;
+        p.secondaryCompanion = undefined;
         p.skillCharges = MAX_SKILL_USES;
         p.healCharges = MAX_HEAL_USES;
         p.focus = 0;
@@ -298,15 +304,18 @@ export class CombatEngine {
       damage = Math.round(damage * (1 - GUARD_DAMAGE_REDUCTION));
     }
 
-    target.hp = Math.max(0, target.hp - damage);
+    const dealt = Math.min(target.hp, damage);
+    target.hp -= dealt;
 
     if (target.hp === 0) {
       target.status = 'eliminated';
+      target.companion = undefined;
+      target.secondaryCompanion = undefined;
     } else {
       target.focus = Math.min(100, (target.focus ?? 0) + 10);
     }
 
-    return { dealt: damage, dodged: false, guarded: hasGuard };
+    return { dealt, dodged: false, guarded: hasGuard };
   }
 
   /* ------------------------------------------------------------------ */
@@ -342,8 +351,6 @@ export class CombatEngine {
       }
     }
 
-    this.brokeThisAction = false;
-
     if ((player.breakMeter ?? 0) > 0) {
       player.breakMeter = Math.max(
         0,
@@ -354,6 +361,7 @@ export class CombatEngine {
     const conjuration =
       action === 'skill' && isCompanionSkill(variant) ? variant : undefined;
     const enemy = battle.mode === 'cpu' ? this.cpuTarget(battle, targetId) : undefined;
+    const enemyHpBefore = enemy?.enemyHp ?? 0;
     const message =
       action === 'item'
         ? this.useItem(game, player, variant, targetId)
@@ -380,10 +388,29 @@ export class CombatEngine {
       this.checkTeamBattleEnd(game, battle);
     } else if (enemy) {
       if (enemy.enemyHp === 0) battle.log.push(enemy.enemyName + ' has been destroyed.');
+      else this.applyEnemyBreak(battle, enemy, player.id, enemyHpBefore - enemy.enemyHp);
       this.syncEnemyHealth(battle);
     }
 
     return message;
+  }
+
+  resolvePlayerBreak(game: GameState, player: Player): boolean {
+    const battle = game.battle;
+    if (battle?.mode !== 'cpu' || battle.status !== 'active') return false;
+    const pending = this.enemyBreaks.get(battle);
+    if (pending?.playerId !== player.id) return false;
+
+    this.enemyBreaks.delete(battle);
+    const { enemy } = pending;
+    if (player.status === 'alive' && enemy.enemyHp > 0) {
+      battle.log.push(player.name + ' attacks again after the break!');
+      battle.log.push(this.resolveCpuPlayerAction(game, enemy, player, 'attack'));
+      if (enemy.enemyHp === 0) battle.log.push(enemy.enemyName + ' has been destroyed.');
+    }
+    enemy.enemyStatusEffects = enemy.enemyStatusEffects?.filter(({ id }) => id !== 'immobilized');
+    this.syncEnemyHealth(battle);
+    return true;
   }
 
   validateAction(
@@ -401,8 +428,10 @@ export class CombatEngine {
             ).includes(variant)
           )
             throw new Error('This fighter has not unlocked that summon.');
-          if (player.companion)
-            throw new Error('This fighter has already summoned a companion.');
+          if (player.companion?.skillId === variant || player.secondaryCompanion?.skillId === variant)
+            throw new Error('This companion is already summoned.');
+          if (player.companion && (player.loadout?.summonCapacity !== 2 || player.secondaryCompanion))
+            throw new Error('All companion slots are in use.');
         } else if (
           variant !== undefined &&
           !fighterKit(player.fighterId).skills.some((id) => id === variant)
@@ -519,6 +548,13 @@ export class CombatEngine {
     }
   }
 
+  private damageEnemy(enemy: CpuBattle, rawDamage: number) {
+    const guarded = enemy.enemyStatusEffects?.some(({ id }) => id === 'guarded');
+    const damage = Math.min(enemy.enemyHp, guarded ? Math.round(rawDamage * (1 - GUARD_DAMAGE_REDUCTION)) : rawDamage);
+    enemy.enemyHp -= damage;
+    return damage;
+  }
+
   private resolveCpuPlayerAction(
     game: GameState,
     battle: CpuBattle,
@@ -529,21 +565,12 @@ export class CombatEngine {
   ): string {
     switch (action) {
       case 'attack': {
-        const damage = this.damage(
-          player,
-          roll(PLAYER_ATTACK[0], PLAYER_ATTACK[1]),
-        );
-        battle.enemyHp = Math.max(0, battle.enemyHp - damage);
+        const damage = this.damageEnemy(battle, this.damage(player, roll(...PLAYER_ATTACK)));
         return `${player.name} attacked ${battle.enemyName} for ${damage} damage.`;
       }
       case 'skill': {
         const skill = this.skillFor(player, variant);
-        const damage = this.damage(
-          player,
-          roll(skill.damage[0], skill.damage[1]),
-          true,
-        );
-        battle.enemyHp = Math.max(0, battle.enemyHp - damage);
+        const damage = this.damageEnemy(battle, this.damage(player, roll(skill.damage[0], skill.damage[1]), true));
         if (skill.target === 'self')
           this.applyStatus(player, { id: skill.effect, turns: 2 });
         else if (battle.enemyHp > 0)
@@ -555,9 +582,8 @@ export class CombatEngine {
         return `${player.name} used ${label} on ${battle.enemyName} for ${damage} damage.`;
       }
       case 'limit': {
-        const damage = this.damage(player, roll(380, 450));
-        battle.enemyHp = Math.max(0, battle.enemyHp - damage);
-        return `${player.name} unleashed a Limit Break for ${damage} damage.`;
+        const damage = this.damageEnemy(battle, this.damage(player, roll(380, 450)));
+        return `${player.name} unleashed a Limit Break on ${battle.enemyName} for ${damage} damage.`;
       }
       case 'heal':
         return this.heal(game, player, variant, targetId);
@@ -604,6 +630,7 @@ export class CombatEngine {
     }
 
     const broke = this.applyBreakMeter(target, dealt);
+    if (broke) this.teamBreaks.add(battle);
 
     if (target.hp === 0) {
       return guarded
@@ -658,6 +685,7 @@ export class CombatEngine {
       });
     }
     const broke = this.applyBreakMeter(target, dealt);
+    if (broke) this.teamBreaks.add(battle);
     if (target.hp === 0) {
       return guarded
         ? `${player.name} used ${label} on ${target.name}, but their guard held — ${dealt} damage. ${target.name} still falls.`
@@ -679,45 +707,76 @@ export class CombatEngine {
   /* ------------------------------------------------------------------ */
 
   private summonCompanion(player: Player, id: CompanionSkillId) {
-    const { entity, sprite } = COMPANION_SKILLS[id];
-    player.companion = {
+    const { entity, sprite, role } = COMPANION_SKILLS[id];
+    const summoned: NonNullable<Player['companion']> = {
       skillId: id,
       name: entity,
       sprite,
       remaining: 1,
       strikes: 0,
+      role,
     };
+    if (player.companion) player.secondaryCompanion = summoned;
+    else player.companion = summoned;
     return `${player.name} summoned ${entity}.`;
   }
 
   resolveCompanions(game: GameState) {
     const battle = game.battle;
     if (!battle || battle.status !== 'active') return;
-    for (const player of game.teams[battle.turnTeamId].players) {
-      const summoned = player.companion;
-      if (!summoned?.remaining) continue;
-      const damage = COMPANION_SKILLS[summoned.skillId].damage;
-      if (battle.mode === 'cpu') {
-        const enemy = this.cpuTarget(battle);
-        const dealt = Math.min(damage, enemy.enemyHp);
-        enemy.enemyHp -= dealt;
-        battle.log.push(summoned.name + ' struck ' + enemy.enemyName + ' for ' + dealt + ' damage.');
-        if (enemy.enemyHp === 0) battle.log.push(enemy.enemyName + ' has been destroyed.');
-        this.syncEnemyHealth(battle);
-      } else {
-        const enemyTeam = player.teamId === battle.attackerTeamId ? battle.defenderTeamId : battle.attackerTeamId;
-        const targets = game.teams[enemyTeam].players.filter(({ status }) => status === 'alive');
-        const target = targets.sort((a, b) => a.hp - b.hp)[0];
-        if (!target) break;
-        const hit = this.applyIncomingDamage(target, damage);
-        battle.log.push(hit.dodged
-          ? target.name + ' dodged ' + summoned.name + '.'
-          : summoned.name + ' struck ' + target.name + ' for ' + hit.dealt + ' damage.');
-        this.checkTeamBattleEnd(game, battle);
+    const allies = game.teams[battle.turnTeamId].players.filter(({ status }) => status === 'alive');
+    for (const player of allies) {
+      for (const summoned of [player.companion, player.secondaryCompanion]) {
+        if (!summoned?.remaining) continue;
+        this.resolveCompanion(game, battle, player, allies, summoned);
+        if (battle.status !== 'active') return;
       }
-      summoned.strikes += 1;
-      if (battle.status !== 'active') break;
     }
+  }
+
+  private resolveCompanion(
+    game: GameState,
+    battle: Battle,
+    owner: Player,
+    allies: Player[],
+    summoned: NonNullable<Player['companion']>,
+  ) {
+    const { damage, role } = COMPANION_SKILLS[summoned.skillId];
+    if (role === 'healer') {
+      const target = allies.reduce((mostInjured, ally) =>
+        ally.hp / ally.maxHp < mostInjured.hp / mostInjured.maxHp ? ally : mostInjured, owner);
+      const healed = Math.min(90, target.maxHp - target.hp);
+      if (!healed) return;
+      target.hp += healed;
+      summoned.strikes++;
+      battle.log.push(summoned.name + ' restored ' + healed + ' HP to ' + target.name + '.');
+      return;
+    }
+    if (role === 'buffer') {
+      if (owner.statusEffects?.some(({ id }) => id === 'enraged')) return;
+      this.applyStatus(owner, { id: 'enraged', turns: 3 });
+      summoned.strikes++;
+      battle.log.push(summoned.name + ' granted Rage to ' + owner.name + '.');
+      return;
+    }
+    if (battle.mode === 'cpu') {
+      const enemy = this.cpuTarget(battle);
+      const dealt = this.damageEnemy(enemy, damage);
+      battle.log.push(summoned.name + ' struck ' + enemy.enemyName + ' for ' + dealt + ' damage.');
+      if (enemy.enemyHp === 0) battle.log.push(enemy.enemyName + ' has been destroyed.');
+      this.syncEnemyHealth(battle);
+    } else {
+      const enemyTeam = owner.teamId === battle.attackerTeamId ? battle.defenderTeamId : battle.attackerTeamId;
+      const targets = game.teams[enemyTeam].players.filter(({ status }) => status === 'alive');
+      const target = targets.sort((a, b) => a.hp - b.hp)[0];
+      if (!target) return;
+      const hit = this.applyIncomingDamage(target, damage);
+      battle.log.push(hit.dodged
+        ? target.name + ' dodged ' + summoned.name + '.'
+        : summoned.name + ' struck ' + target.name + ' for ' + hit.dealt + ' damage.');
+      this.checkTeamBattleEnd(game, battle);
+    }
+    summoned.strikes += 1;
   }
 
   private heal(
@@ -802,25 +861,34 @@ export class CombatEngine {
   }
 
   private applyBreakMeter(target: Player, damage: number): boolean {
-    if (damage < BREAK_MIN_DAMAGE) return false;
+    if (target.status !== 'alive' || damage < BREAK_MIN_DAMAGE) return false;
 
-    const current = target.breakMeter ?? 0;
-    const rawGain = Math.round(damage * BREAK_PER_DAMAGE);
-    const gain = Math.min(BREAK_GAIN_CAP, rawGain);
-
-    const next = Math.min(BREAK_THRESHOLD, current + gain);
-    target.breakMeter = next;
-
-    if (next >= BREAK_THRESHOLD && current < BREAK_THRESHOLD) {
+    target.breakMeter = this.breakPressure(target.breakMeter ?? 0, damage);
+    if (target.breakMeter >= BREAK_THRESHOLD) {
       target.statusEffects = [
         ...(target.statusEffects ?? []).filter((s) => s.id !== 'immobilized'),
         { id: 'immobilized', turns: BREAK_DURATION_TURNS },
       ];
       target.breakMeter = 0;
-      this.brokeThisAction = true;
       return true;
     }
     return false;
+  }
+
+  private breakPressure(current: number, damage: number): number {
+    const gain = Math.min(BREAK_GAIN_CAP, Math.round(damage * BREAK_PER_DAMAGE));
+    return Math.min(BREAK_THRESHOLD, current + gain);
+  }
+
+  private applyEnemyBreak(battle: CpuBattle, enemy: CpuBattle, playerId: string, damage: number) {
+    if (damage < BREAK_MIN_DAMAGE || enemy.enemyStatusEffects?.some(({ id }) => id === 'immobilized')) return;
+    enemy.enemyBreakMeter = this.breakPressure(enemy.enemyBreakMeter ?? 0, damage);
+    if (enemy.enemyBreakMeter < BREAK_THRESHOLD) return;
+
+    enemy.enemyBreakMeter = 0;
+    enemy.enemyStatusEffects = this.withStatus(enemy.enemyStatusEffects, { id: 'immobilized', turns: 1 });
+    this.enemyBreaks.set(battle, { enemy, playerId });
+    battle.log.push(enemy.enemyName + ' is BROKEN!');
   }
 
   private withStatus(effects: StatusEffect[] = [], effect: StatusEffect) {
@@ -847,8 +915,7 @@ export class CombatEngine {
     if (!battle || battle.mode !== 'team') return;
     if (battle.status !== 'active') return;
 
-    if (this.brokeThisAction) {
-      this.brokeThisAction = false;
+    if (this.teamBreaks.delete(battle)) {
       this.assignFirstAlivePlayer(game, battle, battle.turnTeamId);
       return;
     }
@@ -892,6 +959,8 @@ export class CombatEngine {
   private markTeamDefeated(game: GameState, teamId: TeamId) {
     const team = game.teams[teamId];
     for (const p of team.players) {
+      p.companion = undefined;
+      p.secondaryCompanion = undefined;
       if (p.status === 'alive') {
         p.status = 'defeated';
         p.hp = 0;
@@ -960,6 +1029,8 @@ export class CombatEngine {
         if (player.hp === 0) {
           player.status = 'eliminated';
           player.statusEffects = [];
+          player.companion = undefined;
+          player.secondaryCompanion = undefined;
         }
       }
     }
@@ -1021,26 +1092,32 @@ export class CombatEngine {
   /* CPU retaliation                                                     */
   /* ------------------------------------------------------------------ */
 
-  public cpuRetaliate(game: GameState, battle: CpuBattle) {
+  public *cpuRetaliate(game: GameState, battle: CpuBattle): Generator<number> {
     if (battle.enemyUnits) {
-      for (const unit of battle.enemyUnits) {
-        if (unit.enemyHp <= 0) continue;
+      const living = battle.enemyUnits.filter(({ enemyHp }) => enemyHp > 0);
+      const first = (battle.round - 1) % Math.max(1, living.length);
+      const attackers = [...living.slice(first), ...living.slice(0, first)];
+      for (const [index, unit] of attackers.entries()) {
         unit.round = battle.round;
-        this.cpuRetaliate(game, unit);
+        for (const step of this.cpuRetaliate(game, unit)) {
+          battle.log.push(...unit.log.splice(0));
+          this.syncEnemyHealth(battle);
+          yield step;
+        }
         battle.log.push(...unit.log.splice(0));
         if (unit.status === 'defeat') {
           battle.status = 'defeat';
           break;
         }
+        this.syncEnemyHealth(battle);
+        if (index < attackers.length - 1) yield unit.lastTactic === 'crush' ? 900 : 650 + index * 125;
       }
       if (battle.status === 'active') battle.round += 1;
       this.syncEnemyHealth(battle);
       return;
     }
     const team = game.teams[battle.attackerTeamId];
-    const alive = team.players.filter(
-      (p) => p.status === 'alive' && (battle.encounterId || !this.isImmobilized(p)),
-    );
+    const alive = team.players.filter((p) => p.status === 'alive');
     if (alive.length === 0) {
       battle.status = 'defeat';
       battle.log.push('Your team has been wiped out.');
@@ -1059,22 +1136,46 @@ export class CombatEngine {
     const usesSignature =
       signatureEvery > 0 && battle.round % signatureEvery === 0;
 
-    const target = this.pickCpuTarget(battle, alive, personality);
+    const availableTargets = battle.encounterId ? alive : alive.filter((p) => !this.isImmobilized(p));
+    const target = this.pickCpuTarget(battle, availableTargets.length ? availableTargets : alive, personality);
     const phaseMultiplier =
       this.currentPhaseMultiplier(battle) *
       outgoingMultiplier(battle.enemyStatusEffects);
 
-    if (usesSignature) {
-      this.cpuSignature(game, battle, target, phaseMultiplier);
-    } else if (battle.encounterId || Math.random() < abilityChance) {
-      this.cpuAbility(game, battle, target, phaseMultiplier, personality);
-    } else {
-      this.cpuBasicAttack(game, battle, target, phaseMultiplier);
+    const alreadyBroken = new Set(alive.filter((player) => this.isImmobilized(player)));
+    const limit = (battle.enemyFocus ?? 0) >= 100;
+    const usedSupport = battle.encounterId && this.useEnemySupport(battle, target, usesSignature || limit);
+    const usedLimit = limit && !usedSupport;
+    let broke = false;
+    if (!usedSupport) {
+      if (usedLimit || usesSignature) {
+        if (usedLimit) battle.enemyFocus = 0;
+        broke = this.cpuSignature(game, battle, target, phaseMultiplier, usedLimit);
+      } else if (battle.encounterId || Math.random() < abilityChance) {
+        broke = this.cpuAbility(game, battle, target, phaseMultiplier, personality);
+      } else {
+        broke = this.cpuBasicAttack(game, battle, target, phaseMultiplier);
+      }
     }
 
-    const stillAlive = team.players.filter(
-      (p) => p.status === 'alive' && (battle.encounterId || !this.isImmobilized(p)),
-    );
+    if (battle.enemyFocus !== undefined && !limit) battle.enemyFocus = Math.min(100, battle.enemyFocus + 20);
+    const broken = alive.filter((player) => !alreadyBroken.has(player) && this.isImmobilized(player));
+    let stillAlive = team.players.filter((p) => p.status === 'alive');
+    if (usedLimit) yield 2000;
+    if (broke && stillAlive.length > 0) {
+      if (!usedLimit) yield 650;
+      stillAlive = team.players.filter((p) => p.status === 'alive');
+      if (stillAlive.length > 0) {
+        const followUpTarget = broken.find(({ status }) => status === 'alive') ??
+          this.pickCpuTarget(battle, stillAlive, personality);
+        battle.log.push(`${battle.enemyName} attacks again after the break!`);
+        this.cpuBasicAttack(game, battle, followUpTarget, phaseMultiplier, false);
+        stillAlive = stillAlive.filter((p) => p.status === 'alive');
+      }
+    }
+    for (const player of broken) {
+      player.statusEffects = player.statusEffects?.filter(({ id }) => id !== 'immobilized');
+    }
     if (stillAlive.length === 0) {
       battle.status = 'defeat';
       battle.log.push('Your team has been wiped out.');
@@ -1099,6 +1200,40 @@ export class CombatEngine {
   /* Target selection                                                    */
   /* ------------------------------------------------------------------ */
 
+  private useEnemySupport(battle: CpuBattle, target: Player, committedAttack: boolean) {
+    const items = battle.enemyItems;
+    const health = battle.enemyHp / battle.enemyMaxHp;
+    if (items?.tonic && health <= 0.32) {
+      items.tonic--;
+      const healing = Math.min(battle.enemyMaxHp - battle.enemyHp, Math.ceil(battle.enemyMaxHp * 0.2));
+      battle.enemyHp += healing;
+      battle.log.push(battle.enemyName + ' used a Bloodleaf Tonic and recovered ' + healing + ' HP.');
+      return true;
+    }
+    if (committedAttack) return false;
+    if (items?.ward && (target.focus ?? 0) >= 80 && !battle.enemyStatusEffects?.some(({ id }) => id === 'guarded')) {
+      items.ward--;
+      battle.enemyStatusEffects = this.withStatus(battle.enemyStatusEffects, { id: 'guarded', turns: 2 });
+      battle.log.push(battle.enemyName + ' used a Ward Stone and raised its guard.');
+      return true;
+    }
+    if (battle.personality === 'defensive' && battle.round % 3 === 2 && health <= 0.65 &&
+        !battle.enemyStatusEffects?.some(({ id }) => id === 'blessed')) {
+      battle.enemyStatusEffects = this.withStatus(battle.enemyStatusEffects, { id: 'blessed', turns: 3 });
+      battle.log.push(battle.enemyName + ' cast Renewal and became Blessed.');
+      return true;
+    }
+    const guardedTarget = target.statusEffects?.some(({ id }) => id === 'guarded');
+    const wantsRage = battle.personality === 'boss' ? health <= 0.45 : guardedTarget;
+    if (wantsRage && battle.round % 3 === 2 &&
+        !battle.enemyStatusEffects?.some(({ id }) => id === 'enraged')) {
+      battle.enemyStatusEffects = this.withStatus(battle.enemyStatusEffects, { id: 'enraged', turns: 3 });
+      battle.log.push(battle.enemyName + ' cast Battle Fury and gained Rage.');
+      return true;
+    }
+    return false;
+  }
+
   private pickCpuTarget(
     battle: CpuBattle,
     alive: Player[],
@@ -1111,7 +1246,8 @@ export class CombatEngine {
         const vulnerable = 1 - player.hp / Math.max(1, player.maxHp);
         const damage = battle.enemyAttack * (guarded ? 0.5 : 1);
         return vulnerable * 40 + (player.focus ?? 0) * 0.21 +
-          (player.breakMeter ?? 0) * 0.06 + (player.hp <= damage ? 35 : 0) -
+          (player.breakMeter ?? 0) * 0.09 + (player.companion?.remaining ? 20 : 0) +
+          (this.isImmobilized(player) ? 12 : 0) + (player.hp <= damage ? 35 : 0) -
           (guarded ? 20 : 0) - (evading ? 26 : 0);
       };
       return alive.reduce((best, player) => score(player) > score(best) ? player : best);
@@ -1160,6 +1296,7 @@ export class CombatEngine {
     battle: CpuBattle,
     target: Player,
     phaseMultiplier: number,
+    canBreak = true,
   ) {
     const roundMult = Math.min(
       ENEMY_ROUND_RAMP_CAP,
@@ -1179,11 +1316,11 @@ export class CombatEngine {
 
     if (dodged) {
       battle.log.push(`${target.name} dodged ${battle.enemyName}'s attack.`);
-      return;
+      return false;
     }
 
-    // Break meter only builds on hits that landed.
-    const broke = this.applyBreakMeter(target, dealt);
+    // A bonus attack consumes the break and cannot chain into another one.
+    const broke = canBreak && this.applyBreakMeter(target, dealt);
 
     if (guarded) {
       battle.log.push(
@@ -1202,6 +1339,7 @@ export class CombatEngine {
     if (target.hp === 0) {
       battle.log.push(`${target.name} has fallen.`);
     }
+    return broke;
   }
 
   /* ------------------------------------------------------------------ */
@@ -1230,11 +1368,13 @@ export class CombatEngine {
     );
 
     const enrageMult = enraged ? ENRAGE_MULT : 1;
-    const levelScale = battle.encounterId ? Math.max(1, battle.enemyAttack / 145) : 1;
+    const levelScale = battle.encounterId ? battle.enemyAttack / 145 : 1;
     const mult = phaseMultiplier * pressure * enrageMult * levelScale;
 
     const dmgRoll = (min: number, max: number): number =>
       Math.max(1, Math.round(roll(min, max) * mult));
+
+    const brokenPlayers: Player[] = [];
 
     /**
      * Applies a hit to a target through the guard/dodge resolver.
@@ -1253,8 +1393,8 @@ export class CombatEngine {
 
       const { dealt, dodged, guarded } = this.applyIncomingDamage(p, preGuard);
 
-      if (dealt > 0) {
-        this.applyBreakMeter(p, dealt);
+      if (this.applyBreakMeter(p, dealt)) {
+        brokenPlayers.push(p);
       }
 
       return { dealt, crit, dodged, guarded };
@@ -1425,38 +1565,41 @@ export class CombatEngine {
     );
 
     if (pool.length === 0) {
-      this.cpuBasicAttack(game, battle, target, phaseMultiplier);
-      return;
+      return this.cpuBasicAttack(game, battle, target, phaseMultiplier);
     }
 
     if (battle.encounterId) {
       const guarded = target.statusEffects?.some(({ id }) => id === 'guarded');
       const evading = target.statusEffects?.some(({ id }) => id === 'evading');
       const recover = hpRatio < 0.42 && round - (battle.lastMendRound ?? -10) >= 4;
-      const exposed = guarded || evading ? 0 : 10;
+      const exposed = !guarded && !evading;
+      const vulnerable = (target.breakMeter ?? 0) >= BREAK_THRESHOLD - BREAK_GAIN_CAP;
+      const clustered = aliveTeam.filter((player) => !player.statusEffects?.some(({ id }) => id === 'evading')).length;
       const scores: Record<CpuAbilityId, number> = {
         mend: recover ? 80 : -100,
-        howl: round <= 4 && aliveCount <= 2 ? 28 : 2,
-        drain: hpRatio < 0.68 ? 27 + exposed : 6 + exposed,
-        rend: 20 + exposed + (target.hp < 200 ? 13 : 0),
-        sweep: aliveCount > 1 ? 18 + aliveCount * 6 : 2,
-        crush: aliveCount > 1 ? 19 + aliveCount * 8 : 5,
+        howl: round <= 4 ? (exposed ? 20 : 42) : 0,
+        drain: (hpRatio < 0.68 ? 30 : 10) + (exposed ? 8 : 0),
+        rend: 18 + (exposed ? 12 : -5) + (vulnerable || target.hp < battle.enemyAttack ? 16 : 0),
+        sweep: clustered > 1 ? 18 + clustered * 7 : 0,
+        crush: clustered > 1 ? 21 + clustered * 8 : 0,
       };
-      const score = (id: CpuAbilityId) => scores[id] - (id === battle.lastTactic ? 12 : 0);
+      const score = (id: CpuAbilityId) => scores[id] - (id === battle.lastTactic ? 16 : 0);
       const pick = pool.reduce((best, entry) => score(entry.id) > score(best.id) ? entry : best);
-      if (score(pick.id) < 12 || (score(pick.id) < 30 && Math.random() >= (battle.abilityChance ?? 0.68))) {
+      if (score(pick.id) < 16) {
         battle.lastTactic = undefined;
-        this.cpuBasicAttack(game, battle, target, phaseMultiplier);
-        return;
+        return this.cpuBasicAttack(game, battle, target, phaseMultiplier);
       }
       battle.lastTactic = pick.id;
       if (pick.id === 'mend') battle.lastMendRound = round;
       pick.run();
-      return;
+    } else {
+      this.pickAbility(pool, enraged, personality).run();
     }
 
-    const pick = this.pickAbility(pool, enraged, personality);
-    pick.run();
+    for (const player of brokenPlayers) {
+      battle.log.push(`${player.name} is BROKEN!`);
+    }
+    return brokenPlayers.length > 0;
   }
 
   private pickAbility<T extends { id: CpuAbilityId; name: string }>(
@@ -1526,9 +1669,12 @@ export class CombatEngine {
     battle: CpuBattle,
     target: Player,
     phaseMultiplier: number,
+    limit = false,
   ) {
     const multiplier = battle.signatureMultiplier ?? 1.6;
-    const rawDamage = Math.round(roll(112, 160) * phaseMultiplier * multiplier);
+    const levelScale = battle.encounterId ? battle.enemyAttack / 145 : 1;
+    const rawDamage = Math.round(roll(112, 160) * phaseMultiplier * (limit ? 2.2 : multiplier) * levelScale);
+    const move = limit ? 'Limit Break' : 'signature move';
 
     const { dealt, dodged, guarded } = this.applyIncomingDamage(
       target,
@@ -1537,14 +1683,16 @@ export class CombatEngine {
 
     if (dodged) {
       battle.log.push(
-        `${target.name} dodged ${battle.enemyName}'s signature move.`,
+        `${target.name} dodged ${battle.enemyName}'s ${move}.`,
       );
-      return;
+      return false;
     }
 
     const broke = this.applyBreakMeter(target, dealt);
 
-    battle.log.push(
+    if (limit) {
+      battle.log.push(battle.enemyName + ' unleashed a Limit Break on ' + target.name + ' for ' + dealt + ' damage' + (guarded ? ' through their guard.' : '.'));
+    } else battle.log.push(
       guarded
         ? `${battle.enemyName} unleashes a devastating signature move on ${target.name}, but their guard absorbs it — only ${dealt} damage gets through.`
         : `${battle.enemyName} unleashes a devastating signature move on ${target.name} for ${dealt} damage!`,
@@ -1555,6 +1703,7 @@ export class CombatEngine {
     if (target.hp === 0) {
       battle.log.push(`${target.name} has fallen.`);
     }
+    return broke;
   }
 
   /* ------------------------------------------------------------------ */

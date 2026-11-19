@@ -116,6 +116,7 @@ export interface Loadout {
   item: ItemId;
   /** Populated by the server when entering or refreshing a room. */
   unlockedSkills?: CompanionSkillId[];
+  summonCapacity?: 2;
   equippedItem?: ItemEffect;
   strength?: { attack: number; defense: number; speed?: number };
 }

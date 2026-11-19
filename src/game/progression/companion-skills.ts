@@ -1,7 +1,7 @@
 import type { FighterId } from '../game.types';
 
 
-export const COMPANION_SKILLS = {
+const ATTACKER_COMPANIONS = {
   call_iron_sentinel: {
     fighter: 'knight',
     name: 'Call Iron Sentinel',
@@ -78,13 +78,35 @@ export const COMPANION_SKILLS = {
   }
 >;
 
-export type CompanionSkillId = keyof typeof COMPANION_SKILLS;
+export const DUAL_SUMMON_PRODUCT = 'dual_summoning';
+export type CompanionRole = 'attacker' | 'healer' | 'buffer';
+type AttackerId = keyof typeof ATTACKER_COMPANIONS;
+export type CompanionSkillId = AttackerId | `${AttackerId}_healer` | `${AttackerId}_buffer`;
+type CompanionSkill = {
+  fighter: FighterId;
+  name: string;
+  entity: string;
+  sprite: (typeof ATTACKER_COMPANIONS)[AttackerId]['sprite'];
+  damage: number;
+  price: number;
+  role: CompanionRole;
+};
+
+export const COMPANION_SKILLS = Object.fromEntries(
+  Object.entries(ATTACKER_COMPANIONS).flatMap(([id, skill]) => [
+    [id, { ...skill, role: 'attacker' }],
+    [id + '_healer', { ...skill, role: 'healer', name: skill.name + ' Healer', entity: skill.entity + ' Healer' }],
+    [id + '_buffer', { ...skill, role: 'buffer', name: skill.name + ' Guardian', entity: skill.entity + ' Guardian' }],
+  ]),
+) as Record<CompanionSkillId, CompanionSkill>;
 
 export function isCompanionSkill(id: unknown): id is CompanionSkillId {
   return typeof id === 'string' && Object.hasOwn(COMPANION_SKILLS, id);
 }
 
 export function companionSkillDescription(id: CompanionSkillId) {
-  const { entity, damage } = COMPANION_SKILLS[id];
+  const { entity, damage, role } = COMPANION_SKILLS[id];
+  if (role === 'healer') return 'Summon ' + entity + ' to heal the most injured living ally for up to 90 HP per allied turn.';
+  if (role === 'buffer') return 'Summon ' + entity + ' to renew Rage on its owner whenever the attack buff expires.';
   return `Summon ${entity} once per battle. It attacks independently once per allied turn for up to ${damage} extra damage each.`;
 }

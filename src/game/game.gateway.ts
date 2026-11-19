@@ -53,7 +53,8 @@ const ALL_TEAMS: TeamId[] = ['ravens', 'wolves', 'dragons', 'serpents'];
 
 const ACTION_RESOLVE_DELAY_MS = 900;
 const LIMIT_BREAK_RESOLVE_DELAY_MS = 2000;
-const ENEMY_RETALIATE_DELAY_MS = 1200;
+const ENEMY_RETALIATE_DELAY_MS = 700;
+const ENEMY_ATTACK_DELAY_MS = 650;
 const ROUND_DECISION_TIMEOUT_MS = 30_000;
 const STORY_DECISION_TIMEOUT_MS = 70_000;
 
@@ -552,6 +553,8 @@ export class GameGateway {
         } else if (action === 'eliminate') {
           player.hp = 0;
           player.status = 'eliminated';
+          player.companion = undefined;
+          player.secondaryCompanion = undefined;
           this.broadcastEvent(roomCode, {
             type: 'ELIMINATE',
             playerId: player.id,
@@ -1066,8 +1069,9 @@ export class GameGateway {
     this.broadcastRoomList();
   }
 
-  private async resumePath(accountId: string): Promise<EncounterPath> {
-    const checkpoint = await this.progression.encounterCheckpoint(accountId);
+  private async resumePath(accountId: string, tier?: number): Promise<EncounterPath> {
+    const checkpoint = await this.progression.encounterCheckpoint(accountId, tier) ??
+      (tier === undefined ? undefined : await this.progression.encounterCheckpoint(accountId));
     if (!checkpoint) return createEncounterPath();
     return {
       index: checkpoint.cleared === 12 ? 11 : 6,
@@ -1095,7 +1099,7 @@ export class GameGateway {
     }
 
     const next = action === 'resume'
-      ? await this.resumePath(game.hostPlayerId!)
+      ? await this.resumePath(game.hostPlayerId!, path.tier)
       : createEncounterPath(false, action === 'higher' ? path.nextTier : path.tier, path.levels[0].id);
     if (game.phase !== 'ended' || game.encounterPath !== path) return;
     if (action === 'replay') next.savedWins = path.savedWins;
@@ -1491,18 +1495,26 @@ export class GameGateway {
     this.clearRoundTimeout(game.roomCode);
     if (game.paused) return;
 
+    const battle = game.battle;
+    const blocked = battle?.mode === 'cpu' &&
+      this.expectedActors(game, battle).length === 0 &&
+      game.teams[battle.attackerTeamId].players.some(
+        (player) => player.connected && player.status === 'alive' &&
+          player.statusEffects?.some(({ id }) => id === 'immobilized'),
+      );
+    const decisionTime = blocked ? ENEMY_ATTACK_DELAY_MS : ROUND_DECISION_TIMEOUT_MS;
     const handle = setTimeout(() => {
       this.logger.warn(
         `Round timeout fired: room=${game.roomCode} team=${game.battle?.turnTeamId}`,
       );
       void this.handleRoundTimeout(game.roomCode);
-    }, ROUND_DECISION_TIMEOUT_MS);
+    }, decisionTime);
 
     this.roundTimeoutHandles.set(game.roomCode, handle);
 
     this.broadcastEvent(game.roomCode, {
       type: 'ROUND_TIMER',
-      remainingMs: ROUND_DECISION_TIMEOUT_MS,
+      remainingMs: decisionTime,
     });
   }
 
@@ -1995,6 +2007,8 @@ export class GameGateway {
 
     player.status = 'eliminated';
     player.hp = 0;
+    player.companion = undefined;
+    player.secondaryCompanion = undefined;
 
     this.clampRotations(game);
 
@@ -2341,6 +2355,8 @@ export class GameGateway {
     if (victim) {
       victim.status = 'eliminated';
       victim.hp = 0;
+      victim.companion = undefined;
+      victim.secondaryCompanion = undefined;
       this.broadcastEvent(game.roomCode, {
         type: 'ELIMINATE',
         playerId: victim.id,
@@ -2719,31 +2735,19 @@ export class GameGateway {
             this.contributors.set(battle, contributors);
           }
 
-          const newLines = liveBattle.log.slice(before);
-          for (const line of newLines) {
-            this.broadcastEvent(live.roomCode, {
-              type: 'BATTLE_UPDATE',
-              mode: liveBattle.mode,
-              enemyName:
-                liveBattle.mode === 'cpu' ? liveBattle.enemyName : undefined,
-              enemyHp:
-                liveBattle.mode === 'cpu' ? liveBattle.enemyHp : undefined,
-              enemyMaxHp:
-                liveBattle.mode === 'cpu' ? liveBattle.enemyMaxHp : undefined,
-              message: line,
-              source: 'player',
-              actingTeamId: actor.teamId,
-              actingPlayerId: actor.id,
-            });
-            if (line.endsWith('is BROKEN!')) this.emitBreak(line, live);
-          }
-          this.broadcastState(live.roomCode);
+          this.broadcastPlayerAction(live, liveBattle, actor, before);
         } catch (err) {
           this.logger.warn(`Action failed: ${err}`);
         }
 
         if (liveBattle.status === 'active' || presentationDelay === LIMIT_BREAK_RESOLVE_DELAY_MS) {
           await this.wait(presentationDelay);
+        }
+        if (this.gameStore.getGame(live.roomCode)?.battle !== liveBattle) return;
+        const beforeFollowUp = liveBattle.log.length;
+        if (this.combatEngine.resolvePlayerBreak(live, actor)) {
+          this.broadcastPlayerAction(live, liveBattle, actor, beforeFollowUp);
+          if (liveBattle.status === 'active') await this.wait(ACTION_RESOLVE_DELAY_MS);
         }
         if (liveBattle.status !== 'active') break;
       }
@@ -2777,21 +2781,29 @@ export class GameGateway {
           thinking: true,
         });
         await this.wait(ENEMY_RETALIATE_DELAY_MS);
+        if (this.gameStore.getGame(live.roomCode)?.battle !== liveBattle) return;
 
-        const before = liveBattle.log.length;
-        this.combatEngine.cpuRetaliate(live, liveBattle);
-        const newCpuLines = liveBattle.log.slice(before);
-        for (const line of newCpuLines) {
-          this.broadcastEvent(live.roomCode, {
-            type: 'BATTLE_UPDATE',
-            mode: 'cpu',
-            enemyName: liveBattle.enemyName,
-            enemyHp: liveBattle.enemyHp,
-            enemyMaxHp: liveBattle.enemyMaxHp,
-            message: line,
-            source: 'enemy',
-          });
-          if (line.endsWith('is BROKEN!')) this.emitBreak(line, live);
+        const retaliation = this.combatEngine.cpuRetaliate(live, liveBattle);
+        let logOffset = liveBattle.log.length;
+        for (let step = retaliation.next(); ; step = retaliation.next()) {
+          for (const line of liveBattle.log.slice(logOffset)) {
+            this.broadcastEvent(live.roomCode, {
+              type: 'BATTLE_UPDATE',
+              mode: 'cpu',
+              enemyName: liveBattle.enemyName,
+              enemyHp: liveBattle.enemyHp,
+              enemyMaxHp: liveBattle.enemyMaxHp,
+              message: line,
+              source: 'enemy',
+            });
+            if (line.endsWith('is BROKEN!')) this.emitBreak(line, live);
+          }
+          if (step.done) break;
+          logOffset = liveBattle.log.length;
+          this.broadcastState(live.roomCode);
+          await this.wait(step.value);
+          if (this.gameStore.getGame(live.roomCode)?.battle !== liveBattle) return;
+          if (liveBattle.status !== 'active') break;
         }
         this.broadcastEvent(live.roomCode, {
           type: 'BATTLE_UPDATE',
@@ -2822,6 +2834,25 @@ export class GameGateway {
     } finally {
       this.resolvingRooms.delete(game.roomCode);
     }
+  }
+
+  private broadcastPlayerAction(game: GameState, battle: Battle, player: Player, logOffset: number) {
+    const cpu = battle.mode === 'cpu' ? battle : undefined;
+    for (const message of battle.log.slice(logOffset)) {
+      this.broadcastEvent(game.roomCode, {
+        type: 'BATTLE_UPDATE',
+        mode: battle.mode,
+        enemyName: cpu?.enemyName,
+        enemyHp: cpu?.enemyHp,
+        enemyMaxHp: cpu?.enemyMaxHp,
+        message,
+        source: 'player',
+        actingTeamId: player.teamId,
+        actingPlayerId: player.id,
+      });
+      if (!cpu && message.endsWith('is BROKEN!')) this.emitBreak(message, game);
+    }
+    this.broadcastState(game.roomCode);
   }
 
   private async savePathMilestone(game: GameState, path: EncounterPath, cleared: 6 | 12) {
@@ -3217,6 +3248,7 @@ export class GameGateway {
         player.healCharges = undefined;
         player.battleItems = undefined;
         player.companion = undefined;
+        player.secondaryCompanion = undefined;
       }
     }
 

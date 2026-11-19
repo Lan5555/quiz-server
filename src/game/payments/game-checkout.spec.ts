@@ -125,6 +125,21 @@ describe('Embrace cash gear checkout', () => {
     ).rejects.toMatchObject({ status: 409 });
   });
 
+  it('sells Dual Summoning for ?4,000 and grants it after verified payment', async () => {
+    expect(checkout.offers().offers).toContainEqual({
+      gearId: 'dual_summoning', kind: 'summon', name: 'Dual Summoning', amountMinor: 400_000,
+    });
+    const { owner, order, init } = await start('dual_summoning');
+    expect(init.mock.calls[0][0].amount).toBe(400_000);
+    const inventory = () => query('SELECT gear FROM game_accounts WHERE id=$1', [owner]);
+    expect((await inventory())[0]).toEqual({ gear: ['iron_blade', 'traveler_coat'] });
+    jest.spyOn(provider, 'verify').mockResolvedValue(evidence(order.id, { id: '450010', amount: 400_000 }));
+    await Promise.all([checkout.verify(owner, order.id), checkout.verify(owner, order.id)]);
+    expect((await inventory())[0]).toEqual({ gear: ['iron_blade', 'traveler_coat', 'dual_summoning'] });
+    await expect(checkout.start(owner, randomUUID(), 'dual_summoning', 'player@example.test'))
+      .rejects.toMatchObject({ status: 409 });
+  });
+
   it('lists the additional server-priced weapons, armor, and consumables', () => {
     expect(checkout.offers().offers).toEqual(
       expect.arrayContaining([
