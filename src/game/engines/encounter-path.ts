@@ -88,13 +88,17 @@ export function encounterOpponents(path: EncounterPath): EncounterLevel[] {
   const level = path.levels[path.index];
   if (!level) return [];
   const ids = [level.id, ...(level.allies ?? []).map(({ id }) => id)];
-  const tierScale = 1 + Math.min(60, (path.tier ?? 1) - 1) * 0.21;
+  const tierOffset = Math.max(0, Math.min(60, (path.tier ?? 1) - 1));
+  const hpMultiplier = 2 ** tierOffset;
+  const attackMultiplier = Math.sqrt(1 + tierOffset * 0.21);
   const healthShare = ids.length === 1 ? 1 : ids.length === 2 ? 0.57 : 0.43;
   const attackShare = ids.length === 1 ? 1 : ids.length === 2 ? 0.62 : 0.47;
+  // Keep each HP value and the party's combined HP within the safe integer range.
+  const hpCeiling = Math.floor(Number.MAX_SAFE_INTEGER / ids.length);
   return ids.flatMap((id) => {
     const enemy = roster.find((entry) => entry.id === id);
     if (!enemy) return [];
-    return [{ ...enemy, hp: Math.round(enemy.hp * tierScale * healthShare),
-      attack: Math.round(enemy.attack * Math.sqrt(tierScale) * attackShare) }];
+    const hp = Math.min(hpCeiling, Math.round(enemy.hp * healthShare) * hpMultiplier);
+    return [{ ...enemy, hp, attack: Math.round(enemy.attack * attackMultiplier * attackShare) }];
   });
 }
