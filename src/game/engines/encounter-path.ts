@@ -26,7 +26,7 @@ export const ENCOUNTER_LEVELS: readonly EncounterLevel[] = [
   { id: 'bellkeeper', name: 'Bellkeeper', hint: 'Its ringing grows into a team-wide assault.',
     hp: 2444, attack: 192, personality: 'strategic', abilities: ['sweep', 'crush', 'howl'],
     signatureEveryNRounds: 3, signatureMultiplier: 1.55 },
-  { id: 'ashen-matriarch', name: 'Ashen Matriarch', hint: 'Deny her recovery, then brace for her enraged phase.',
+  { id: 'ashen-matriarch', name: 'Ashen Matriarch', hint: 'Deny her recovery. At half health, she can call an Ash Familiar.',
     hp: 2756, attack: 208, personality: 'boss', abilities: ['drain', 'mend', 'rend', 'sweep'],
     signatureEveryNRounds: 3, signatureMultiplier: 1.6,
     phases: [{ hpThreshold: 0.4, attackMultiplier: 1.2, announcement: 'The Ashen Matriarch ignites her crown.' }] },
@@ -56,10 +56,21 @@ const NEW_ENCOUNTERS: readonly EncounterLevel[] = [
     phases: [{ hpThreshold: 0.45, attackMultiplier: 1.2, announcement: 'The Tidebound Executioner wrenches its anchor free.' }] },
 ];
 
-const roster = [...ENCOUNTER_LEVELS, ...NEW_ENCOUNTERS];
+const ELITE_ENCOUNTERS: readonly EncounterLevel[] = [
+  { id: 'glasswing-siren', name: 'Glasswing Siren', hint: 'Break her before she can drain, mend, or summon a Glasswing Echo.',
+    hp: 2830, attack: 220, personality: 'defensive', abilities: ['drain', 'mend', 'sweep'], signatureEveryNRounds: 4, signatureMultiplier: 1.48 },
+  { id: 'obsidian-harrower', name: 'Obsidian Harrower', hint: 'Guard when it howls; its charged sweep hits the whole party.',
+    hp: 3250, attack: 235, personality: 'aggressive', abilities: ['howl', 'sweep', 'crush'], signatureEveryNRounds: 3, signatureMultiplier: 1.55 },
+];
+
+const roster = [...ENCOUNTER_LEVELS, ...NEW_ENCOUNTERS, ...ELITE_ENCOUNTERS];
 
 export function createEncounterPath(adventure = false, tier = 1, previousFirst?: string): EncounterPath {
-  const lineup = adventure ? [...ENCOUNTER_LEVELS] : [...roster];
+  const lineup = adventure ? [...ENCOUNTER_LEVELS] : [
+    ...ENCOUNTER_LEVELS,
+    ...NEW_ENCOUNTERS.map((enemy, index) => tier % 2 === 1 && (index === 1 || index === 4)
+      ? ELITE_ENCOUNTERS[index === 1 ? 0 : 1] : enemy),
+  ];
   if (!adventure && tier > 1) {
     for (let index = lineup.length - 1; index > 0; index--) {
       const other = Math.floor(Math.random() * (index + 1));

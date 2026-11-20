@@ -30,7 +30,17 @@ New accounts receive 300 credits, starter gear, two Bloodleaf Tonics, and one Wa
 
 Normal actions grant 20 Focus, and taking a hit grants 10. A Limit Break spends 100 Focus. Players can inspect equipment and items before a match. Loadouts are saved to the account and locked for each active PvP match.
 
+Lady Ley and the Grave Chorister are available without a purchase. Their signature moves use existing round rules: successful evasions empower Astral Severance, Crimson Waltz can spend Focus, and the Chorister exploits targets that are wounded, Broken, or Burning. Odd Highlands tiers include the Glasswing Siren and Obsidian Harrower. The tier length and saved checkpoints are unchanged. End-of-battle snapshots include confirmed XP and Cinders for participation and tier completion, not projected rewards.
+
+## Battle reward storage
+
+`game_battle_rewards` stores duplicate-payout guards, while balances and XP live on `game_accounts`. Guards are retained for seven days. Every minute the backend deletes expired guards in batches of 5,000, up to 20 batches per run. The gateway keeps the original server settlement time on the battle across retries; the reward query rejects settlements older than seven days even after their guard has been deleted. This bounds storage to recent battle participation rather than lifetime play. Balances, XP, purchases, and encounter milestones are preserved.
+
+Stop all older backend instances, apply migration `1795478400000-EmbraceBattleRewardRetention` (or [the standalone SQL](sql/embrace-battle-reward-retention.sql)), then start the updated backend. Restarting clears in-memory rooms. Do not run the cleanup alongside an older backend: its reward path can pay an expired retry again. Cleanup starts within a minute and gradually clears the backlog. PostgreSQL can reuse the freed space; normal vacuum does not shrink the database file. This does not retain a permanent per-battle reward history. Unsettled retries older than seven days are intentionally rejected.
+
 ## Flutterwave gear checkout
+
+Four companion skills have both Cinder and cash prices (750 Cinders or NGN 1,200 each). Both payment paths grant the same permanent skill. A pending or review cash order blocks buying that same skill with Cinders until resolved. Verified cash unlocks appear in the profile and in that fighter's Skills menu when the player loads into a room. No new schema is required beyond the existing checkout and progression tables. Deploy the backend before the web client so the new fighter IDs are accepted by rooms.
 
 Premium offers include 300 Cinders for ₦1,000, 1,000 Cinders for ₦3,000, stronger equipment at ₦3,500 each, and stronger consumables at ₦500 each. Existing orders for the retired offers can still be fulfilled. The cash offer prices live in `src/game/payments/game-checkout.service.ts`, in kobo. An order keeps the price quoted when it was created.
 

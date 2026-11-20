@@ -24,6 +24,20 @@ export type CombatAction =
   | 'limit';
 
 export type SkillId =
+  | 'oathbreaker_aegis'
+  | 'dawnglass_verdict'
+  | 'gravebell_collapse'
+  | 'phantom_thread'
+  | 'thunder_meridian'
+  | 'astral_convergence'
+  | 'pyre_afterimage'
+  | 'black_sun_cascade'
+  | 'astral_severance'
+  | 'crimson_waltz'
+  | 'moonveil_reflection'
+  | 'unwritten_end'
+  | 'chronos_elegy'
+  | 'funeral_of_stars'
   | 'shadow_strike'
   | 'blood_rage'
   | 'fire_burst'
@@ -101,6 +115,8 @@ export const ROOM_FIGHTERS = [
   'duelist',
   'monk',
   'arcanist',
+  'lady-ley',
+  'grave-chorister',
   ...(Object.keys(PREMIUM_FIGHTERS) as PremiumFighterId[]),
 ] as const;
 export type FighterId = (typeof ROOM_FIGHTERS)[number];
@@ -230,7 +246,11 @@ export interface QueuedAction {
 /* Battle — single definition per variant                              */
 /* ================================================================== */
 
+type EarnedReward = { xp: number; cinders: number; level?: number };
+type BattleRewards = { earned: Record<string, EarnedReward>; tier?: EarnedReward; tierPlayerId?: string; unavailable?: string[] };
+
 export interface TeamBattle {
+  rewards?: BattleRewards;
   id: string;
   mode: 'team';
   attackerTeamId: TeamId;
@@ -249,6 +269,7 @@ export interface TeamBattle {
 }
 
 export interface CpuBattle {
+  rewards?: BattleRewards;
   id: string;
   mode: 'cpu';
   attackerTeamId: TeamId;

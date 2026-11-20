@@ -30,7 +30,7 @@ import type { AdminPlayerSummary, CpuAbilityId, CpuPhase } from './game.types';
 import { GameAccountsService } from './accounts/game-accounts.service';
 import { applyAdventureInteraction, createAdventureQuest } from './engines/adventure-quests';
 import { createEncounterPath, encounterOpponents } from './engines/encounter-path';
-import { ProgressionService } from './progression/progression.service';
+import { BATTLE_CINDERS, BATTLE_XP, ProgressionService } from './progression/progression.service';
 import { isPremiumFighter, type Loadout } from './progression/catalog';
 
 interface ConnectedClient {
@@ -254,6 +254,7 @@ export class GameGateway {
 
   private readonly resolvingRooms = new Set<string>();
   private readonly contributors = new WeakMap<Battle, Set<string>>();
+  private readonly rewardSettledAt = new WeakMap<Battle, Date>();
   private readonly kickedPlayers = new WeakMap<GameState, Set<string>>();
   private roundTimeoutHandles = new Map<string, NodeJS.Timeout>();
   private storyTimeoutHandles = new Map<string, NodeJS.Timeout>();
@@ -2862,6 +2863,10 @@ export class GameGateway {
     path.savePending = undefined;
     if (result.reward && result.progression) {
       path.completionReward = result.reward;
+      if (game.battle?.rewards) {
+        game.battle.rewards.tier = { ...result.reward, level: result.progression.level };
+        game.battle.rewards.tierPlayerId = game.hostPlayerId;
+      }
       const host = this.findPlayer(game, game.hostPlayerId);
       if (host?.loadout) {
         const { attack, defense, speed } = result.progression;
@@ -2874,9 +2879,18 @@ export class GameGateway {
   private async finishRound(game: GameState) {
     const battle = game.battle;
     if (battle && (battle.status === 'victory' || battle.status === 'defeat')) {
+      const rewards = battle.rewards ??= { earned: {} };
+      const settledAt = this.rewardSettledAt.get(battle) ?? new Date();
+      this.rewardSettledAt.set(battle, settledAt);
       const results = await Promise.allSettled(
         [...(this.contributors.get(battle) ?? [])].map(async (id) => {
-          const progression = await this.progression.reward(id, battle.id);
+          const progression = await this.progression.reward(id, battle.id, settledAt).catch((error) => {
+            const unavailable = rewards.unavailable ??= [];
+            if (!unavailable.includes(id)) unavailable.push(id);
+            throw error;
+          });
+          if (rewards.unavailable) rewards.unavailable = rewards.unavailable.filter((playerId) => playerId !== id);
+          if (progression) rewards.earned[id] = { xp: BATTLE_XP, cinders: BATTLE_CINDERS, level: progression.level };
           const player = this.findPlayer(game, id);
           if (progression && player?.loadout) {
             player.loadout.strength = { attack: progression.attack, defense: progression.defense, speed: progression.speed };
@@ -2902,6 +2916,8 @@ export class GameGateway {
       }
     }
     if (game.battle !== battle) return;
+    if (battle?.rewards && !(game.battleMode === 'cpu' && path && battle.mode === 'cpu' && battle.encounterId))
+      this.broadcastState(game.roomCode);
     this.endBattleAndAdvance(game);
     this.broadcastStory(game.roomCode);
     this.broadcastState(game.roomCode);

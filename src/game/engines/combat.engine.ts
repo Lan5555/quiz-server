@@ -83,6 +83,8 @@ function roll(min: number, max: number) {
 }
 
 export class CombatEngine {
+  private readonly recentEvade = new WeakSet<Player>();
+  private readonly enemySummons = new WeakSet<CpuBattle>();
   private readonly teamBreaks = new WeakSet<TeamBattle>();
   private readonly enemyBreaks = new WeakMap<CpuBattle, { enemy: CpuBattle; playerId: string }>();
 
@@ -251,6 +253,7 @@ export class CombatEngine {
   private resetBattleCharges(game: GameState) {
     for (const team of Object.values(game.teams)) {
       for (const p of team.players) {
+        this.recentEvade.delete(p);
         p.combatKit = presentCombatKit(p.fighterId, p.loadout?.unlockedSkills);
         p.battleItems = starterBattleItems(p.fighterId);
         p.companion = undefined;
@@ -290,6 +293,7 @@ export class CombatEngine {
     if (hasEvade) {
       const dodged = Math.random() < DODGE_EVADE_CHANCE;
       if (dodged) {
+        this.recentEvade.add(target);
         return { dealt: 0, dodged: true, guarded: false };
       }
     }
@@ -570,7 +574,7 @@ export class CombatEngine {
       }
       case 'skill': {
         const skill = this.skillFor(player, variant);
-        const damage = this.damageEnemy(battle, this.damage(player, roll(skill.damage[0], skill.damage[1]), true));
+        const damage = this.damageEnemy(battle, this.skillDamage(player, skill, battle.enemyHp / battle.enemyMaxHp, battle.enemyStatusEffects));
         if (skill.target === 'self')
           this.applyStatus(player, { id: skill.effect, turns: 2 });
         else if (battle.enemyHp > 0)
@@ -661,11 +665,7 @@ export class CombatEngine {
       ? opponents.find((p) => p.id === targetId)
       : undefined;
     const target = requested ?? opponents[roll(0, opponents.length - 1)];
-    const rawDamage = this.damage(
-      player,
-      roll(skill.damage[0], skill.damage[1]),
-      true,
-    );
+    const rawDamage = this.skillDamage(player, skill, target.hp / target.maxHp, target.statusEffects);
 
     const { dealt, dodged, guarded } = this.applyIncomingDamage(
       target,
@@ -808,6 +808,26 @@ export class CombatEngine {
     const skills = fighterKit(player.fighterId).skills;
     const id = skills.find((skill) => skill === variant) ?? skills[0];
     return SKILLS[id];
+  }
+
+  private skillDamage(player: Player, skill: ReturnType<CombatEngine['skillFor']>, healthRatio: number, effects: StatusEffect[] = []) {
+    let base = roll(skill.damage[0], skill.damage[1]);
+    if ((skill === SKILLS.astral_severance || skill === SKILLS.phantom_thread) && this.recentEvade.delete(player)) base += 110;
+    if ((skill === SKILLS.crimson_waltz || skill === SKILLS.thunder_meridian) && (player.focus ?? 0) >= 40) {
+      player.focus = (player.focus ?? 0) - 40;
+      base += skill === SKILLS.crimson_waltz ? 135 : 130;
+    }
+    if (skill === SKILLS.oathbreaker_aegis && player.statusEffects?.some(({ id }) => id === 'guarded')) base += 80;
+    if (skill === SKILLS.dawnglass_verdict && player.statusEffects?.some(({ id }) => id === 'blessed')) base += 85;
+    if (skill === SKILLS.gravebell_collapse && effects.some(({ id }) => id === 'immobilized')) base += 115;
+    if (skill === SKILLS.astral_convergence) base += 45 * new Set(effects.map(({ id }) => id).filter(isAffliction)).size;
+    if (skill === SKILLS.pyre_afterimage && effects.some(({ id }) => id === 'burning')) base += 85;
+    if (skill === SKILLS.black_sun_cascade && healthRatio <= 0.5) base += 105;
+    if (skill === SKILLS.moonveil_reflection && player.statusEffects?.some(({ id }) => id === 'guarded')) base += 70;
+    if (skill === SKILLS.unwritten_end && healthRatio <= 0.15) base += 140;
+    if (skill === SKILLS.chronos_elegy && effects.some(({ id }) => id === 'immobilized')) base += 115;
+    if (skill === SKILLS.funeral_of_stars && effects.some(({ id }) => id === 'burning')) base += 75;
+    return this.damage(player, base, true);
   }
 
   private restore(
@@ -1092,14 +1112,19 @@ export class CombatEngine {
   /* CPU retaliation                                                     */
   /* ------------------------------------------------------------------ */
 
-  public *cpuRetaliate(game: GameState, battle: CpuBattle): Generator<number> {
+  public *cpuRetaliate(game: GameState, battle: CpuBattle, root = true): Generator<number> {
+    if (root && this.tryEnemySummon(battle)) {
+      battle.round += 1;
+      yield 650;
+      return;
+    }
     if (battle.enemyUnits) {
       const living = battle.enemyUnits.filter(({ enemyHp }) => enemyHp > 0);
       const first = (battle.round - 1) % Math.max(1, living.length);
       const attackers = [...living.slice(first), ...living.slice(0, first)];
       for (const [index, unit] of attackers.entries()) {
         unit.round = battle.round;
-        for (const step of this.cpuRetaliate(game, unit)) {
+        for (const step of this.cpuRetaliate(game, unit, false)) {
           battle.log.push(...unit.log.splice(0));
           this.syncEnemyHealth(battle);
           yield step;
@@ -1194,6 +1219,32 @@ export class CombatEngine {
     if (battle.encounterId && signatureEvery > 0 && battle.round % signatureEvery === 0) {
       battle.log.push(`${battle.enemyName} is preparing a signature attack for the next turn!`);
     }
+  }
+
+  private tryEnemySummon(battle: CpuBattle) {
+    if (battle.status !== 'active') return false;
+    const units = battle.enemyUnits ?? [battle];
+    if (this.enemySummons.has(battle) || battle.round < 3 || units.filter(({ enemyHp }) => enemyHp > 0).length >= 3) return false;
+    const caster = units.find((unit) => unit.enemyHp > 0 && unit.enemyHp <= unit.enemyMaxHp / 2 &&
+      (unit.encounterId === 'glasswing-siren' || unit.encounterId === 'ashen-matriarch') &&
+      !unit.enemyStatusEffects?.some(({ id }) => id === 'immobilized'));
+    if (!caster) return false;
+    const bySiren = caster.encounterId === 'glasswing-siren';
+    const hp = Math.max(1, Math.min(Math.round(caster.enemyMaxHp * 0.16), Number.MAX_SAFE_INTEGER - battle.enemyMaxHp));
+    if (battle.enemyMaxHp >= Number.MAX_SAFE_INTEGER) return false;
+    const echo = this.makeCpuBattle(battle.attackerTeamId, bySiren ? 'Glasswing Echo' : 'Ash Familiar', hp, hp, {
+      attack: Math.max(1, Math.round((caster.enemyAttack ?? 100) * 0.42)),
+      personality: 'aggressive',
+      abilities: bySiren ? ['drain'] : ['rend'],
+      abilityChance: 0.65,
+    });
+    echo.encounterId = bySiren ? 'glasswing-echo' : 'ash-familiar';
+    battle.enemyUnits = [...(battle.enemyUnits ?? [{ ...battle, id: 'cpu', log: [] }]), echo];
+    battle.enemyMaxHp += hp;
+    this.syncEnemyHealth(battle);
+    this.enemySummons.add(battle);
+    battle.log.push(`${caster.enemyName} summoned ${echo.enemyName}.`);
+    return true;
   }
 
   /* ------------------------------------------------------------------ */

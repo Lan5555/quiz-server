@@ -21,6 +21,7 @@ import {
 import type { GearId, ItemId, Loadout, PremiumFighterId } from './catalog';
 import {
   COMPANION_SKILLS,
+  CASH_SKILLS,
   companionSkillDescription,
   DUAL_SUMMON_PRODUCT,
   isCompanionSkill,
@@ -115,16 +116,16 @@ export class ProgressionService {
     );
     if (!profile) throw new NotFoundException('Game account not found.');
     profile.progression = experience(profile.xp);
-    profile.unlockedSkills = await this.unlockedSkills(id, tx);
+    profile.unlockedSkills = await this.unlockedSkills(id, profile.gear, tx);
     return profile;
   }
 
-  private async unlockedSkills(id: string, tx = this.db.manager) {
+  private async unlockedSkills(id: string, gear: readonly string[], tx = this.db.manager) {
     const rows = await tx.query<{ product: CompanionSkillId }[]>(
       'SELECT DISTINCT product FROM game_purchases WHERE account_id=$1 AND product=ANY($2::text[]) ORDER BY product',
       [id, Object.keys(COMPANION_SKILLS)],
     );
-    return rows.map(({ product }) => product);
+    return [...new Set([...rows.map(({ product }) => product), ...gear.filter(isCompanionSkill)])];
   }
 
   async roomLoadout(id: string): Promise<Loadout> {
@@ -133,7 +134,7 @@ export class ProgressionService {
       [id],
     );
     if (!account) throw new NotFoundException('Game account not found.');
-    const unlockedSkills = await this.unlockedSkills(id);
+    const unlockedSkills = await this.unlockedSkills(id, account.gear);
     const item = account.loadout.item;
     const equippedItem = isItem(item)
       ? { ...ITEMS[item], ...ITEM_EFFECTS[item] }
@@ -209,6 +210,13 @@ export class ProgressionService {
       if (skill && isCompanionSkill(itemId)) {
         if (profile.unlockedSkills.includes(itemId))
           throw new ConflictException('You already own this skill.');
+        if (Object.hasOwn(CASH_SKILLS, itemId)) {
+          const [order] = await tx.query<{ id: string }[]>(
+            "SELECT id FROM game_checkout_orders WHERE account_id=$1 AND gear_id=$2 AND status IN ('PENDING','REVIEW') LIMIT 1",
+            [id, itemId],
+          );
+          if (order) throw new ConflictException('Check your existing Flutterwave order before buying this skill with Cinders.');
+        }
         if (
           skill.fighter === 'ember-duelist' ||
           skill.fighter === 'eclipse-arcanist'
@@ -307,16 +315,20 @@ export class ProgressionService {
     });
   }
 
-  async reward(id: string, battleId: string) {
+  // settledAt must be the server's original settlement time, reused on every retry.
+  async reward(id: string, battleId: string, settledAt: Date) {
     const [updated] = await this.db.query<{ xp: number }[]>(
       `WITH reward AS (
-        INSERT INTO game_battle_rewards(account_id,battle_id) VALUES ($1,$2)
+        INSERT INTO game_battle_rewards(account_id,battle_id)
+        SELECT $1::uuid,$2::uuid
+        WHERE $5::timestamptz > statement_timestamp() - interval '7 days'
+          AND $5::timestamptz <= statement_timestamp() + interval '5 minutes'
         ON CONFLICT DO NOTHING RETURNING account_id
       ), awarded AS (
         UPDATE game_accounts SET credits=credits+$3,xp=xp+$4
         WHERE id IN (SELECT account_id FROM reward) RETURNING xp
       ) SELECT xp FROM awarded`,
-      [id, battleId, BATTLE_CINDERS, BATTLE_XP],
+      [id, battleId, BATTLE_CINDERS, BATTLE_XP, settledAt],
     );
     return updated ? experience(updated.xp) : undefined;
   }

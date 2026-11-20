@@ -2,6 +2,22 @@ import type { FighterId } from '../game.types';
 
 
 const ATTACKER_COMPANIONS = {
+  call_moonveil_double: {
+    fighter: 'lady-ley',
+    name: 'Call Moonveil Double',
+    entity: 'Moonveil Double',
+    sprite: 'hollow-specter',
+    damage: 165,
+    price: 750,
+  },
+  call_grave_cantor: {
+    fighter: 'grave-chorister',
+    name: 'Call Grave Cantor',
+    entity: 'Grave Cantor',
+    sprite: 'gate-warden',
+    damage: 165,
+    price: 750,
+  },
   call_iron_sentinel: {
     fighter: 'knight',
     name: 'Call Iron Sentinel',
@@ -103,6 +119,13 @@ export const COMPANION_SKILLS = Object.fromEntries(
 export function isCompanionSkill(id: unknown): id is CompanionSkillId {
   return typeof id === 'string' && Object.hasOwn(COMPANION_SKILLS, id);
 }
+
+export const CASH_SKILLS = {
+  call_moonveil_double: { name: COMPANION_SKILLS.call_moonveil_double.name, amountMinor: 120_000 },
+  call_moonveil_double_healer: { name: COMPANION_SKILLS.call_moonveil_double_healer.name, amountMinor: 120_000 },
+  call_grave_cantor: { name: COMPANION_SKILLS.call_grave_cantor.name, amountMinor: 120_000 },
+  call_grave_cantor_buffer: { name: COMPANION_SKILLS.call_grave_cantor_buffer.name, amountMinor: 120_000 },
+} as const;
 
 export function companionSkillDescription(id: CompanionSkillId) {
   const { entity, damage, role } = COMPANION_SKILLS[id];

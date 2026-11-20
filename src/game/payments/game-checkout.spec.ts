@@ -3,7 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { DataSource } from 'typeorm';
+import type { DataSource, QueryRunner } from 'typeorm';
+import { EmbraceShopAndExperience1795219200000 } from '../../migrations/1795219200000-EmbraceShopAndExperience';
 import { VotingConfig } from '../../voting/common/voting';
 import {
   FlutterwaveProviderError,
@@ -11,6 +12,7 @@ import {
 } from '../../voting/payments/flutterwave.service';
 import type { ProviderTransaction } from '../../voting/payments/flutterwave.service';
 import { GameCheckoutService } from './game-checkout.service';
+import { ProgressionService } from '../progression/progression.service';
 
 describe('Embrace cash gear checkout', () => {
   const pg = new PGlite();
@@ -22,6 +24,7 @@ describe('Embrace cash gear checkout', () => {
     (await pg.query(statement, params)).rows;
   const db = {
     query,
+    manager: { query },
     transaction: (
       callback: (tx: { query: typeof query }) => Promise<unknown>,
     ) =>
@@ -43,9 +46,11 @@ describe('Embrace cash gear checkout', () => {
   );
   const provider = new FlutterwaveService(config);
   const checkout = new GameCheckoutService(db, provider, config);
+  const progression = new ProgressionService(db);
 
   beforeAll(async () => {
     await pg.exec(sql);
+    await new EmbraceShopAndExperience1795219200000().up({ query: (statement: string) => pg.exec(statement) } as QueryRunner);
   }, 15_000);
   afterAll(() => pg.close());
   afterEach(() => jest.restoreAllMocks());
@@ -91,6 +96,25 @@ describe('Embrace cash gear checkout', () => {
     );
     return { init, owner, requestId, order };
   }
+
+  it('grants the same permanent skill through either currency without duplicate purchases', async () => {
+    const skill = 'call_moonveil_double';
+    expect(checkout.offers().offers).toContainEqual({ gearId: skill, kind: 'skill', name: 'Call Moonveil Double', amountMinor: 120_000 });
+    const { owner, order } = await start(skill);
+    await query('UPDATE game_accounts SET credits=1000 WHERE id=$1', [owner]);
+    await expect(progression.purchase(owner, randomUUID(), skill)).rejects.toMatchObject({ status: 409 });
+    expect((await progression.profile(owner)).unlockedSkills).not.toContain(skill);
+    jest.spyOn(provider, 'verify').mockResolvedValue(evidence(order.id, { id: '450021', amount: 120_000 }));
+    await Promise.all([checkout.verify(owner, order.id), checkout.verify(owner, order.id)]);
+    expect((await progression.roomLoadout(owner)).unlockedSkills).toEqual([skill]);
+    await expect(progression.purchase(owner, randomUUID(), skill)).rejects.toMatchObject({ status: 409 });
+
+    const second = await account();
+    await query('UPDATE game_accounts SET credits=1000 WHERE id=$1', [second]);
+    const purchased = await progression.purchase(second, randomUUID(), skill);
+    expect(purchased.profile).toMatchObject({ credits: 250, unlockedSkills: [skill] });
+    await expect(checkout.start(second, randomUUID(), skill, 'player@example.test')).rejects.toMatchObject({ status: 409 });
+  });
 
   it('grants the named fighter only once after verified full payment', async () => {
     const { owner, order, init } = await start('ember-duelist');

@@ -13,12 +13,16 @@ import { EmbraceProgression1794873600000 } from '../migrations/1794873600000-Emb
 import { EmbraceAdmin1795046400000 } from '../migrations/1795046400000-EmbraceAdmin';
 import { GameAccountsService } from './accounts/game-accounts.service';
 import { CombatEngine } from './engines/combat.engine';
+import { createEncounterPath } from './engines/encounter-path';
+import { presentCombatKit } from './engines/fighter-combat';
 import { StoryEngine } from './engines/story.engine';
 import { GameStore } from './game.store';
 import { GameGateway } from './game.gateway';
 import type { Player } from './game.types';
 import { STARTER_LOADOUT } from './progression/catalog';
 import { ProgressionService } from './progression/progression.service';
+import { BattleRewardRetentionService } from './progression/battle-reward-retention.service';
+import { EmbraceBattleRewardRetention1795478400000 } from '../migrations/1795478400000-EmbraceBattleRewardRetention';
 
 describe('Embrace progression PostgreSQL integration', () => {
   const pg = new PGlite();
@@ -50,9 +54,26 @@ describe('Embrace progression PostgreSQL integration', () => {
     await new EmbraceShopAndExperience1795219200000().up(runner);
     await new EmbraceEncounterCheckpoints1795305600000().up(runner);
     await new EmbracePerTierCheckpoints1795392000000().up(runner);
+    await new EmbraceBattleRewardRetention1795478400000().up(runner);
   }, 15000);
 
   afterAll(() => pg.close());
+
+  it('provides distinct kits for new fighters and keeps elites within the 12-fight path', () => {
+    expect(presentCombatKit('lady-ley', ['call_moonveil_double']).skills.map(({ id }) => id)).toEqual([
+      'astral_severance', 'crimson_waltz', 'moonveil_reflection', 'call_moonveil_double',
+    ]);
+    expect(presentCombatKit('grave-chorister', ['call_moonveil_double']).skills.map(({ id }) => id)).toEqual([
+      'unwritten_end', 'chronos_elegy', 'funeral_of_stars',
+    ]);
+    const first = createEncounterPath().levels.map(({ id }) => id);
+    const second = createEncounterPath(false, 2).levels.map(({ id }) => id);
+    expect(first).toHaveLength(12);
+    expect(first).toEqual(expect.arrayContaining(['glasswing-siren', 'obsidian-harrower']));
+    expect(second).toHaveLength(12);
+    expect(second).toEqual(expect.arrayContaining(['saltglass-oracle', 'cinder-jackal']));
+    expect(createEncounterPath(true).levels).toHaveLength(6);
+  });
 
   it('seeds and loads the existing story graph from PostgreSQL', async () => {
     await query(
@@ -122,6 +143,29 @@ describe('Embrace progression PostgreSQL integration', () => {
     expect(spent.filter(Boolean)).toHaveLength(3);
   });
 
+  it('prunes old guards without changing balances or allowing an expired settlement to pay again', async () => {
+    const { id } = await accounts.authenticate('Retention', 'long-game-pass', 'test-retention', true);
+    const expiredBattle = randomUUID();
+    const recentBattle = randomUUID();
+    const settledAt = new Date();
+    await progression.reward(id, expiredBattle, settledAt);
+    await progression.reward(id, recentBattle, settledAt);
+    await query("UPDATE game_battle_rewards SET created_at=now()-interval '8 days' WHERE account_id=$1 AND battle_id=$2", [id, expiredBattle]);
+    const before = await progression.profile(id);
+    const retention = new BattleRewardRetentionService(db);
+    expect(await retention.pruneBatch()).toBe(1);
+    expect(await retention.pruneBatch()).toBe(0);
+    expect(await query('SELECT battle_id FROM game_battle_rewards WHERE account_id=$1', [id])).toEqual([{ battle_id: recentBattle }]);
+    const expiredTime = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    expect(await progression.reward(id, expiredBattle, expiredTime)).toBeUndefined();
+    expect(await progression.reward(id, randomUUID(), expiredTime)).toBeUndefined();
+    expect(await progression.reward(id, recentBattle, settledAt)).toBeUndefined();
+    expect(await progression.reward(id, randomUUID(), new Date(Date.now() + 3600_000))).toBeUndefined();
+    expect(await progression.profile(id)).toEqual(before);
+    expect(await query('SELECT battle_id FROM game_battle_rewards WHERE account_id=$1', [id])).toHaveLength(1);
+    expect(await progression.reward(id, randomUUID(), new Date())).toBeDefined();
+  });
+
   it('guarantees the tenth summon and settles battle Cinders and XP once', async () => {
     const { id } = await accounts.authenticate(
       'Cinder',
@@ -137,12 +181,13 @@ describe('Embrace progression PostgreSQL integration', () => {
     );
     expect(purchase.profile.pity).toBe(0);
     const battleId = randomUUID();
+    const settledAt = new Date();
     await Promise.all([
-      progression.reward(id, battleId),
-      progression.reward(id, battleId),
+      progression.reward(id, battleId, settledAt),
+      progression.reward(id, battleId, settledAt),
     ]);
     expect(await progression.profile(id)).toMatchObject({ credits: 230, xp: 25, progression: { level: 1 } });
-    for (let i = 0; i < 3; i++) await progression.reward(id, randomUUID());
+    for (let i = 0; i < 3; i++) await progression.reward(id, randomUUID(), new Date());
     expect(await progression.profile(id)).toMatchObject({
       credits: 320, xp: 100, progression: { level: 2, attack: 2, defense: 1 },
     });
@@ -584,6 +629,7 @@ describe('Embrace progression PostgreSQL integration', () => {
       encounter.enemyHp = 0;
       encounter.status = 'victory';
       await gateway['finishRound'](practice);
+      if (i === 11) expect(encounter.rewards).toMatchObject({ tier: { cinders: 180, xp: 100 }, tierPlayerId: host.id });
       if (i < 5) expect(await progression.encounterCheckpoint(host.id)).toBeUndefined();
       if (i >= 5 && i < 11) {
         expect(await progression.encounterCheckpoint(host.id)).toMatchObject({ tier: 1, cleared: 6 });
@@ -727,6 +773,7 @@ describe('Embrace loadouts in combat', () => {
       'shadow_strike',
       'spirit_palm',
       'riposte',
+      'phantom_thread',
     ]);
     expect(() =>
       engine.performAction(game, player, 'skill', 'fire_burst'),
@@ -1010,6 +1057,42 @@ describe('Embrace loadouts in combat', () => {
     } finally {
       random.mockRestore();
     }
+  });
+
+  it('adds a veteran signature without replacing moves or allowing it on another kit', () => {
+    const engine = new CombatEngine();
+    const player = { fighterId: 'knight', skillCharges: 2 } as Player;
+    expect(presentCombatKit('knight').skills.map(({ id }) => id)).toEqual([
+      'iron_cleave', 'blood_rage', 'blacksteel_rebuke', 'oathbreaker_aegis',
+    ]);
+    expect(() => engine.validateAction(player, 'skill', 'oathbreaker_aegis')).not.toThrow();
+    expect(() => engine.validateAction({ ...player, fighterId: 'monk' }, 'skill', 'oathbreaker_aegis')).toThrow();
+  });
+
+  it('summons a targetable familiar once, from round three and below half HP', () => {
+    const game = new GameStore().createRoom('enemy-summon');
+    const player: Player = {
+      id: 'fighter', name: 'Fighter', teamId: 'ravens', hp: 5000, maxHp: 5000,
+      ready: true, connected: true, status: 'alive',
+    };
+    game.teams.ravens.players.push(player);
+    const engine = new CombatEngine();
+    const battle = engine.createEncounterBattle(game, 'ravens', [{
+      id: 'glasswing-siren', name: 'Glasswing Siren', hint: '', hp: 1000, attack: 145,
+      personality: 'aggressive', abilities: ['rend'], signatureEveryNRounds: 0, signatureMultiplier: 1,
+    }]);
+    game.battle = battle;
+    battle.round = 3;
+    battle.enemyHp = 500;
+    expect(engine.cpuRetaliate(game, battle).next()).toEqual({ value: 650, done: false });
+    expect(battle).toMatchObject({ enemyHp: 660, enemyMaxHp: 1160, round: 4 });
+    expect(battle.log.at(-1)).toBe('Glasswing Siren summoned Glasswing Echo.');
+    const echo = battle.enemyUnits?.[1];
+    expect(echo).toMatchObject({ encounterId: 'glasswing-echo', enemyHp: 160 });
+    engine.performAction(game, player, 'attack', undefined, echo!.id);
+    expect(echo!.enemyHp).toBeLessThan(160);
+    Array.from(engine.cpuRetaliate(game, battle));
+    expect(battle.enemyUnits).toHaveLength(2);
   });
 
   it('lets an encounter enemy pick a healing item, a buff spell and a Limit Break', () => {

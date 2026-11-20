@@ -21,6 +21,20 @@ export const RAGE_MULTIPLIER = 1.2;
 export const WARDEN_HEAL_BONUS = 90;
 
 export const SKILLS = {
+  oathbreaker_aegis: { name: 'Oathbreaker Aegis', description: 'Drive your shield into the enemy and gain Guarded. If you were already Guarded, deal 80 extra base damage.', damage: [180, 220], effect: 'guarded', target: 'self' },
+  dawnglass_verdict: { name: 'Dawnglass Verdict', description: 'Strike and gain Blessed. If you were already Blessed, deal 85 extra base damage.', damage: [185, 220], effect: 'blessed', target: 'self' },
+  gravebell_collapse: { name: 'Gravebell Collapse', description: 'Crush and Curse the enemy. Deal 115 extra base damage if they are Broken.', damage: [195, 235], effect: 'cursed', target: 'enemy' },
+  phantom_thread: { name: 'Phantom Thread', description: 'Strike and gain Evading. A successful dodge empowers your next Phantom Thread with 110 extra base damage.', damage: [175, 215], effect: 'evading', target: 'self' },
+  thunder_meridian: { name: 'Thunder Meridian', description: 'Strike and Curse the target. If you have 40 Focus, spend it to add 130 base damage.', damage: [180, 220], effect: 'cursed', target: 'enemy' },
+  astral_convergence: { name: 'Astral Convergence', description: 'Mark the target with Curse. Add 45 base damage per different affliction already on the target.', damage: [185, 225], effect: 'cursed', target: 'enemy' },
+  pyre_afterimage: { name: 'Pyre Afterimage', description: 'Cut through the enemy and ignite them. Deal 85 extra base damage if they are already Burning.', damage: [190, 225], effect: 'burning', target: 'enemy' },
+  black_sun_cascade: { name: 'Black Sun Cascade', description: 'Collapse a black sun onto the target and leave them Burning. Deal 105 extra base damage at or below half health.', damage: [185, 225], effect: 'burning', target: 'enemy' },
+  astral_severance: { name: 'Astral Severance', description: 'Leave a damaging fracture (Poison). Evade a hit first to empower the next slash.', damage: [185, 220], effect: 'poisoned', target: 'enemy' },
+  crimson_waltz: { name: 'Crimson Waltz', description: 'Cut and gain Evading. Spend 40 Focus, when available, on a stronger finishing strike.', damage: [190, 230], effect: 'evading', target: 'self' },
+  moonveil_reflection: { name: 'Moonveil Reflection', description: 'Strike and raise a guard. The strike deals more damage if you are already Guarded.', damage: [180, 215], effect: 'guarded', target: 'self' },
+  unwritten_end: { name: 'The Unwritten End', description: 'Curse the target. Deal additional damage against enemies at 15% HP or less.', damage: [185, 225], effect: 'cursed', target: 'enemy' },
+  chronos_elegy: { name: 'Chronos Elegy', description: 'Weaken the target with Cursed. Deal additional damage if the target is already Broken.', damage: [185, 230], effect: 'cursed', target: 'enemy' },
+  funeral_of_stars: { name: 'Funeral of Stars', description: 'Burn the target. Deal more damage against a target that is already Burning.', damage: [195, 240], effect: 'burning', target: 'enemy' },
   iron_cleave: {
     name: 'Iron Cleave',
     description: 'Strike and guard against incoming hits for 3 turns.',
@@ -152,15 +166,26 @@ type Heal = {
   effect?: 'guarded' | 'blessed' | 'evading' | 'cleanse';
 };
 type Kit = {
-  skills: readonly [SkillId, SkillId, SkillId];
+  skills: readonly [SkillId, SkillId, SkillId] | readonly [SkillId, SkillId, SkillId, SkillId];
   heal: Heal;
   recovery: Heal;
   wardKit?: boolean;
 };
 
 const KITS = {
+  'lady-ley': {
+    skills: ['astral_severance', 'crimson_waltz', 'moonveil_reflection'],
+    heal: { name: 'Lunar Mending', amount: 295, target: 'self', effect: 'evading' },
+    recovery: { name: 'Dawn Thread', amount: 235, target: 'ally', effect: 'cleanse' },
+  },
+  'grave-chorister': {
+    skills: ['unwritten_end', 'chronos_elegy', 'funeral_of_stars'],
+    heal: { name: 'Grave Hymn', amount: 325, target: 'ally', effect: 'blessed' },
+    recovery: { name: 'Quietus', amount: 245, target: 'self', effect: 'guarded' },
+    wardKit: true,
+  },
   knight: {
-    skills: ['iron_cleave', 'blood_rage', 'blacksteel_rebuke'],
+    skills: ['iron_cleave', 'blood_rage', 'blacksteel_rebuke', 'oathbreaker_aegis'],
     recovery: {
       name: 'Shieldmate',
       amount: 230,
@@ -176,7 +201,7 @@ const KITS = {
     },
   },
   maiden: {
-    skills: ['dawnstrike', 'fire_burst', 'sunbrand'],
+    skills: ['dawnstrike', 'fire_burst', 'sunbrand', 'dawnglass_verdict'],
     recovery: {
       name: 'Purifying Hymn',
       amount: 235,
@@ -186,7 +211,7 @@ const KITS = {
     heal: { name: 'Dawnlight', amount: 380, target: 'ally', effect: 'blessed' },
   },
   warden: {
-    skills: ['iron_cleave', 'dawnstrike', 'bellstroke'],
+    skills: ['iron_cleave', 'dawnstrike', 'bellstroke', 'gravebell_collapse'],
     recovery: {
       name: 'Bastion Rite',
       amount: 275,
@@ -197,7 +222,7 @@ const KITS = {
     heal: { name: 'Sanctuary', amount: 350, target: 'ally', effect: 'guarded' },
   },
   duelist: {
-    skills: ['shadow_strike', 'spirit_palm', 'riposte'],
+    skills: ['shadow_strike', 'spirit_palm', 'riposte', 'phantom_thread'],
     recovery: {
       name: 'Poison Salve',
       amount: 205,
@@ -212,7 +237,7 @@ const KITS = {
     },
   },
   monk: {
-    skills: ['spirit_palm', 'blood_rage', 'thunder_kata'],
+    skills: ['spirit_palm', 'blood_rage', 'thunder_kata', 'thunder_meridian'],
     recovery: {
       name: 'Shared Stillness',
       amount: 240,
@@ -228,7 +253,7 @@ const KITS = {
     },
   },
   arcanist: {
-    skills: ['fire_burst', 'void_blast', 'hex_lance'],
+    skills: ['fire_burst', 'void_blast', 'hex_lance', 'astral_convergence'],
     recovery: {
       name: 'Aether Veil',
       amount: 265,
@@ -243,7 +268,7 @@ const KITS = {
     },
   },
   'ember-duelist': {
-    skills: ['fire_burst', 'shadow_strike', 'cinderstep'],
+    skills: ['fire_burst', 'shadow_strike', 'cinderstep', 'pyre_afterimage'],
     recovery: {
       name: 'Cauterize',
       amount: 255,
@@ -253,7 +278,7 @@ const KITS = {
     heal: { name: 'Kindle', amount: 280, target: 'self', effect: 'blessed' },
   },
   'eclipse-arcanist': {
-    skills: ['void_blast', 'astral_bind', 'eclipse_sigil'],
+    skills: ['void_blast', 'astral_bind', 'eclipse_sigil', 'black_sun_cascade'],
     recovery: {
       name: 'Umbral Shelter',
       amount: 260,

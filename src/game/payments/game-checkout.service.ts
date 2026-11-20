@@ -23,7 +23,7 @@ import {
   isPremiumFighter,
 } from '../progression/catalog';
 
-import { DUAL_SUMMON_PRODUCT } from '../progression/companion-skills';
+import { CASH_SKILLS, DUAL_SUMMON_PRODUCT, isCompanionSkill } from '../progression/companion-skills';
 
 const PRODUCTS = {
   [DUAL_SUMMON_PRODUCT]: { name: 'Dual Summoning', amountMinor: 400_000 },
@@ -39,6 +39,7 @@ const PRODUCTS = {
   sovereign_ward: { name: ITEMS.sovereign_ward.name, amountMinor: 50_000 },
   ...CINDER_BUNDLES,
   ...PREMIUM_FIGHTERS,
+  ...CASH_SKILLS,
 } as const;
 const LEGACY_OFFERS = new Set(['ashblade','bellwarden_mail','hollowfang','oathkeeper_plate','bloodleaf_tonic','ward_stone']);
 
@@ -50,6 +51,14 @@ function owns(account: AccountInventory, product: PaidProductId) {
   return (
     isPremiumFighter(product) ? account.fighter_ids : account.gear
   ).includes(product);
+}
+
+async function ownsCinderSkill(tx: DataSource['manager'], id: string, product: PaidProductId) {
+  if (!isCompanionSkill(product)) return false;
+  const [purchase] = await tx.query<{ product: string }[]>(
+    'SELECT product FROM game_purchases WHERE account_id=$1 AND product=$2 LIMIT 1', [id, product],
+  );
+  return Boolean(purchase);
 }
 export type CheckoutOrder = {
   id: string;
@@ -90,7 +99,7 @@ export class GameCheckoutService {
         .filter((id) => !LEGACY_OFFERS.has(id))
         .map((gearId) => ({
         gearId,
-        kind: gearId === DUAL_SUMMON_PRODUCT ? 'summon' : isPremiumFighter(gearId)
+        kind: isCompanionSkill(gearId) ? 'skill' : gearId === DUAL_SUMMON_PRODUCT ? 'summon' : isPremiumFighter(gearId)
           ? 'fighter'
           : isCinderBundle(gearId)
             ? 'cinders'
@@ -143,7 +152,7 @@ export class GameCheckoutService {
         }
         return { order: previous, initialize: false };
       }
-      if (owns(account, gearId))
+      if (owns(account, gearId) || await ownsCinderSkill(tx, accountId, gearId))
         throw new ConflictException('You already own this product.');
       const [open] = await tx.query<OrderRow[]>(
         "SELECT * FROM game_checkout_orders WHERE account_id=$1 AND gear_id=$2 AND status IN ('PENDING','REVIEW') ORDER BY (status='PENDING') DESC, created_at DESC LIMIT 1",
@@ -311,7 +320,7 @@ export class GameCheckoutService {
         : evidence.amount !== order.amount_minor ||
             evidence.currency !== order.currency
           ? 'AMOUNT_OR_CURRENCY_MISMATCH'
-          : owns(account, order.gear_id)
+          : owns(account, order.gear_id) || await ownsCinderSkill(tx, order.account_id, order.gear_id)
             ? 'ALREADY_OWNED'
             : null;
       if (reason) {

@@ -18,6 +18,7 @@ import { EmbraceShopAndExperience1795219200000 } from './migrations/179521920000
 import { EmbraceFighters1795132800000 } from './migrations/1795132800000-EmbraceFighters';
 import { EmbraceCheckout1794960000000 } from './migrations/1794960000000-EmbraceCheckout';
 import { EmbraceAdmin1795046400000 } from './migrations/1795046400000-EmbraceAdmin';
+import { EmbraceBattleRewardRetention1795478400000 } from './migrations/1795478400000-EmbraceBattleRewardRetention';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -38,6 +39,7 @@ export const AppDataSource = new DataSource({
     EmbraceAdmin1795046400000,
     EmbraceShopAndExperience1795219200000,
     EmbraceEncounterCheckpoints1795305600000,
+    EmbraceBattleRewardRetention1795478400000,
   ],
   subscribers: [],
 });

@@ -9,6 +9,7 @@ import { CombatEngine } from './engines/combat.engine';
 import { GameAccountController } from './accounts/game-account.controller';
 import { GameAccountsService } from './accounts/game-accounts.service';
 import { ProgressionService } from './progression/progression.service';
+import { BattleRewardRetentionService } from './progression/battle-reward-retention.service';
 import { GameCheckoutModule } from './payments/game-checkout.module';
 import {
   GameAdminController,
@@ -27,6 +28,7 @@ import { GameAdminService } from './admin/game-admin.service';
     CombatEngine,
     GameAccountsService,
     ProgressionService,
+    BattleRewardRetentionService,
     GameAdminService,
     GameModeratorGuard,
   ],
