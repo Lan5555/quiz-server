@@ -29,7 +29,6 @@ import {
   MaxLength,
   Length,
   Min,
-  Max,
   IsBoolean,
 } from 'class-validator';
 import type { Request } from 'express';

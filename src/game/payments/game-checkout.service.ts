@@ -155,8 +155,16 @@ export class GameCheckoutService {
             name: gear.name,
             amountMinor: gear.cashAmountMinor,
             imageUrl: gear.imageUrl,
+            createdAt: gear.createdAt,
           }));
-        return [...staticOffers, ...dynamicGear];
+        return [
+          ...dynamicGear.sort(
+            (left, right) =>
+              Date.parse(right.createdAt ?? '0') -
+              Date.parse(left.createdAt ?? '0'),
+          ),
+          ...staticOffers,
+        ];
       })(),
     };
   }

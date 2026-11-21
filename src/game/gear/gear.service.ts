@@ -47,6 +47,7 @@ export class GameGearService implements OnModuleInit {
         ? { cashAmountMinor: gear.cashAmountMinor }
         : {}),
       summonable: !gear.paid,
+      createdAt: gear.created_at?.toISOString(),
       imageUrl:
         gear.imageUrl ||
         (gear.slot === 'armor'

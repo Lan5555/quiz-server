@@ -18,6 +18,7 @@ export interface GearDefinition {
   cashAmountMinor?: number;
   imageUrl?: string;
   summonable?: boolean;
+  createdAt?: string;
 }
 
 export function isPremiumFighter(id: unknown): id is PremiumFighterId {

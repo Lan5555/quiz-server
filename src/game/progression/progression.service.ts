@@ -84,7 +84,10 @@ export class ProgressionService {
     const custom = await customItems(this.db.manager);
     return {
       gear: GEAR,
-      items: { ...ITEMS, ...Object.fromEntries(custom.map((item) => [item.id, item])) },
+      items: {
+        ...ITEMS,
+        ...Object.fromEntries(custom.map((item) => [item.id, item])),
+      },
       skills: Object.fromEntries(
         Object.entries(COMPANION_SKILLS).map(([id, skill]) => [
           id,
@@ -120,19 +123,27 @@ export class ProgressionService {
     return profile;
   }
 
-  private async unlockedSkills(id: string, gear: readonly string[], tx = this.db.manager) {
+  private async unlockedSkills(
+    id: string,
+    gear: readonly string[],
+    tx = this.db.manager,
+  ) {
     const rows = await tx.query<{ product: CompanionSkillId }[]>(
       'SELECT DISTINCT product FROM game_purchases WHERE account_id=$1 AND product=ANY($2::text[]) ORDER BY product',
       [id, Object.keys(COMPANION_SKILLS)],
     );
-    return [...new Set([...rows.map(({ product }) => product), ...gear.filter(isCompanionSkill)])];
+    return [
+      ...new Set([
+        ...rows.map(({ product }) => product),
+        ...gear.filter(isCompanionSkill),
+      ]),
+    ];
   }
 
   async roomLoadout(id: string): Promise<Loadout> {
-    const [account] = await this.db.query<{ loadout: Loadout; xp: number; gear: string[] }[]>(
-      'SELECT loadout,xp,gear FROM game_accounts WHERE id=$1',
-      [id],
-    );
+    const [account] = await this.db.query<
+      { loadout: Loadout; xp: number; gear: string[] }[]
+    >('SELECT loadout,xp,gear FROM game_accounts WHERE id=$1', [id]);
     if (!account) throw new NotFoundException('Game account not found.');
     const unlockedSkills = await this.unlockedSkills(id, account.gear);
     const item = account.loadout.item;
@@ -143,7 +154,9 @@ export class ProgressionService {
     return {
       ...account.loadout,
       ...(unlockedSkills.length ? { unlockedSkills } : {}),
-      summonCapacity: account.gear.includes(DUAL_SUMMON_PRODUCT) ? 2 : undefined,
+      summonCapacity: account.gear.includes(DUAL_SUMMON_PRODUCT)
+        ? 2
+        : undefined,
       equippedItem,
       strength: { attack, defense, speed },
     };
@@ -153,13 +166,15 @@ export class ProgressionService {
     return this.db.transaction(async (tx) => {
       const profile = await this.profile(id, tx, true);
       const { job, weapon, armor, item } = loadout;
-      const canEquipItem = item === profile.loadout.item || (profile.items[item] ?? 0) > 0;
+      const canEquipItem =
+        item === profile.loadout.item || (profile.items[item] ?? 0) > 0;
       if (
         !Object.hasOwn(JOBS, job) ||
         !isGear(weapon) ||
         !isGear(armor) ||
         (!(item === 'bloodleaf_tonic' || item === 'ward_stone') &&
-          (!canEquipItem || (!isItem(item) && !(await customItems(tx, item)).length))) ||
+          (!canEquipItem ||
+            (!isItem(item) && !(await customItems(tx, item)).length))) ||
         GEAR[weapon].slot !== 'weapon' ||
         GEAR[armor].slot !== 'armor' ||
         !profile.gear.includes(weapon) ||
@@ -200,7 +215,8 @@ export class ProgressionService {
         ? COMPANION_SKILLS[itemId]
         : undefined;
       const gear = isGear(itemId) ? GEAR[itemId] : undefined;
-      const item = isItem(itemId) ? ITEMS[itemId]
+      const item = isItem(itemId)
+        ? ITEMS[itemId]
         : !gear && !skill && itemId.startsWith('custom_')
           ? (await customItems(tx, itemId))[0]
           : undefined;
@@ -215,7 +231,10 @@ export class ProgressionService {
             "SELECT id FROM game_checkout_orders WHERE account_id=$1 AND gear_id=$2 AND status IN ('PENDING','REVIEW') LIMIT 1",
             [id, itemId],
           );
-          if (order) throw new ConflictException('Check your existing Flutterwave order before buying this skill with Cinders.');
+          if (order)
+            throw new ConflictException(
+              'Check your existing Flutterwave order before buying this skill with Cinders.',
+            );
         }
         if (
           skill.fighter === 'ember-duelist' ||
@@ -247,7 +266,12 @@ export class ProgressionService {
       profile.credits += duplicateCredits - spent;
       if (summon)
         profile.pity = gear?.rarity === 'legendary' ? 0 : profile.pity + 1;
-      const result: PurchaseResult = { itemId: itemId as PurchaseResult['itemId'], duplicateCredits, spent, guaranteed };
+      const result: PurchaseResult = {
+        itemId: itemId as PurchaseResult['itemId'],
+        duplicateCredits,
+        spent,
+        guaranteed,
+      };
       await tx.query(
         'UPDATE game_accounts SET credits=$2,pity=$3,gear=$4::jsonb,items=$5::jsonb WHERE id=$1',
         [
@@ -287,31 +311,51 @@ export class ProgressionService {
     return checkpoint;
   }
 
-  async saveEncounterCheckpoint(id: string, path: EncounterPath, cleared: 6 | 12) {
+  async saveEncounterCheckpoint(
+    id: string,
+    path: EncounterPath,
+    cleared: 6 | 12,
+  ) {
     const tier = path.tier ?? 1;
     return this.db.transaction(async (tx) => {
       // The account lock also covers a player's first checkpoint, before a row exists.
-      const [account] = await tx.query<{ id: string }[]>('SELECT id FROM game_accounts WHERE id=$1 FOR UPDATE', [id]);
+      const [account] = await tx.query<{ id: string }[]>(
+        'SELECT id FROM game_accounts WHERE id=$1 FOR UPDATE',
+        [id],
+      );
       if (!account) throw new NotFoundException('Game account not found.');
       const previous = await this.encounterCheckpoint(id, tier, tx);
-      if (previous && previous.cleared >= cleared) return { savedWins: previous.cleared };
+      if (previous && previous.cleared >= cleared)
+        return { savedWins: previous.cleared };
       const highest = await this.encounterCheckpoint(id, undefined, tx);
-      const unlockedTier = highest ? highest.tier + (highest.cleared === 12 ? 1 : 0) : 1;
+      const unlockedTier = highest
+        ? highest.tier + (highest.cleared === 12 ? 1 : 0)
+        : 1;
       if (tier > unlockedTier) {
-        throw new ConflictException('Clear the current difficulty before saving a higher tier.');
+        throw new ConflictException(
+          'Clear the current difficulty before saving a higher tier.',
+        );
       }
-      await tx.query(`
+      await tx.query(
+        `
         INSERT INTO game_encounter_checkpoints (account_id, tier, cleared, levels) VALUES ($1,$2,$3,$4::jsonb)
         ON CONFLICT (account_id, tier) DO UPDATE SET tier=EXCLUDED.tier, cleared=EXCLUDED.cleared, levels=EXCLUDED.levels
-      `, [id, tier, cleared, JSON.stringify(path.levels)]);
+      `,
+        [id, tier, cleared, JSON.stringify(path.levels)],
+      );
       // Older accounts saved only their highest tier. Earlier tiers were already rewarded.
-      if (cleared === 6 || (highest && tier < highest.tier)) return { savedWins: cleared };
+      if (cleared === 6 || (highest && tier < highest.tier))
+        return { savedWins: cleared };
       const reward = ENCOUNTER_COMPLETION_REWARD;
       const [updated] = await tx.query<{ xp: number }[]>(
         'UPDATE game_accounts SET credits=credits+$2,xp=xp+$3 WHERE id=$1 RETURNING xp',
         [id, reward.cinders, reward.xp],
       );
-      return { savedWins: cleared, reward, progression: experience(updated.xp) };
+      return {
+        savedWins: cleared,
+        reward,
+        progression: experience(updated.xp),
+      };
     });
   }
 
@@ -339,13 +383,16 @@ export class ProgressionService {
       .filter(([id, gear]) => !existing.has(id) && gear.summonable === true)
       .map(([id, gear]) => ({
         id,
-        weight: gear.rarity === 'legendary' ? 3 : gear.rarity === 'rare' ? 17 : 30,
+        weight:
+          gear.rarity === 'legendary' ? 3 : gear.rarity === 'rare' ? 17 : 30,
       }));
 
-    const dynamicLegendaries = dynamic.filter(({ id }) => GEAR[id].rarity === 'legendary');
+    const dynamicLegendaries = dynamic.filter(
+      ({ id }) => GEAR[id].rarity === 'legendary',
+    );
     const base = dynamicLegendaries.length
-      ? SUMMON_POOL.filter(({ id }) =>
-          !['hollowfang', 'oathkeeper_plate'].includes(id),
+      ? SUMMON_POOL.filter(
+          ({ id }) => !['hollowfang', 'oathkeeper_plate'].includes(id),
         )
       : SUMMON_POOL;
 
@@ -358,7 +405,8 @@ export class ProgressionService {
           ({ id }) =>
             isGear(id) &&
             GEAR[id].rarity === 'legendary' &&
-            (SUMMON_POOL.some((entry) => entry.id === id) || GEAR[id].summonable === true),
+            (SUMMON_POOL.some((entry) => entry.id === id) ||
+              GEAR[id].summonable === true),
         )
       : this.summonPool();
     let ticket = randomInt(
