@@ -144,11 +144,9 @@ class ShopItemDto {
   effect!: 'heal' | 'guard';
   @IsInt()
   @Min(1)
-  @Max(320)
   power!: number;
   @IsInt()
   @Min(1)
-  @Max(100000)
   price!: number;
 }
 
