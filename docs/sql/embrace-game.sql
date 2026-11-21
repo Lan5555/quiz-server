@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS game_accounts (
   password_digest text NOT NULL,
   moderator boolean NOT NULL DEFAULT false,
   credits integer NOT NULL DEFAULT 300 CHECK (credits >= 0),
-  pity integer NOT NULL DEFAULT 0 CHECK (pity BETWEEN 0 AND 9),
+  pity integer NOT NULL DEFAULT 0 CHECK (pity BETWEEN 0 AND 89),
   gear jsonb NOT NULL DEFAULT '["iron_blade","traveler_coat"]',
   items jsonb NOT NULL DEFAULT '{"bloodleaf_tonic":2,"ward_stone":1}',
   loadout jsonb NOT NULL DEFAULT '{"job":"vanguard","weapon":"iron_blade","armor":"traveler_coat","item":"bloodleaf_tonic"}',

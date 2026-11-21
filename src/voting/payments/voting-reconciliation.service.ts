@@ -153,9 +153,6 @@ export class VotingReconciliationService {
               ? `SQLSTATE=${code}`
               : 'database_error';
         }
-        this.logger.warn(
-          `Voting receipt email remains queued: stage=${stage} reason=${reason}`,
-        );
       }
     }
   }

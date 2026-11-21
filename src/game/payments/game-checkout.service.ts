@@ -19,11 +19,16 @@ import {
   ITEMS,
   PREMIUM_FIGHTERS,
   isCinderBundle,
+  isGear,
   isItem,
   isPremiumFighter,
 } from '../progression/catalog';
 
-import { CASH_SKILLS, DUAL_SUMMON_PRODUCT, isCompanionSkill } from '../progression/companion-skills';
+import {
+  CASH_SKILLS,
+  DUAL_SUMMON_PRODUCT,
+  isCompanionSkill,
+} from '../progression/companion-skills';
 
 const PRODUCTS = {
   [DUAL_SUMMON_PRODUCT]: { name: 'Dual Summoning', amountMinor: 400_000 },
@@ -33,7 +38,10 @@ const PRODUCTS = {
   ward_stone: { name: ITEMS.ward_stone.name, amountMinor: 50_000 },
   hollowfang: { name: GEAR.hollowfang.name, amountMinor: 350_000 },
   oathkeeper_plate: { name: GEAR.oathkeeper_plate.name, amountMinor: 350_000 },
-  crownforged_blade: { name: GEAR.crownforged_blade.name, amountMinor: 350_000 },
+  crownforged_blade: {
+    name: GEAR.crownforged_blade.name,
+    amountMinor: 350_000,
+  },
   sovereign_plate: { name: GEAR.sovereign_plate.name, amountMinor: 350_000 },
   royal_bloodleaf: { name: ITEMS.royal_bloodleaf.name, amountMinor: 50_000 },
   sovereign_ward: { name: ITEMS.sovereign_ward.name, amountMinor: 50_000 },
@@ -41,9 +49,24 @@ const PRODUCTS = {
   ...PREMIUM_FIGHTERS,
   ...CASH_SKILLS,
 } as const;
-const LEGACY_OFFERS = new Set(['ashblade','bellwarden_mail','hollowfang','oathkeeper_plate','bloodleaf_tonic','ward_stone']);
+const LEGACY_OFFERS = new Set([
+  'ashblade',
+  'bellwarden_mail',
+  'hollowfang',
+  'oathkeeper_plate',
+  'bloodleaf_tonic',
+  'ward_stone',
+]);
 
-type PaidProductId = keyof typeof PRODUCTS;
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
+type PaidProductId = keyof typeof PRODUCTS | string;
+
+function paidGearProduct(product: string) {
+  if (!isGear(product) || !GEAR[product].paid) return undefined;
+  const cashAmountMinor = GEAR[product].cashAmountMinor;
+  if (!cashAmountMinor) return undefined;
+  return { name: GEAR[product].name, amountMinor: cashAmountMinor };
+}
 type AccountInventory = { gear: string[]; fighter_ids: string[] };
 
 function owns(account: AccountInventory, product: PaidProductId) {
@@ -53,10 +76,15 @@ function owns(account: AccountInventory, product: PaidProductId) {
   ).includes(product);
 }
 
-async function ownsCinderSkill(tx: DataSource['manager'], id: string, product: PaidProductId) {
+async function ownsCinderSkill(
+  tx: DataSource['manager'],
+  id: string,
+  product: PaidProductId,
+) {
   if (!isCompanionSkill(product)) return false;
   const [purchase] = await tx.query<{ product: string }[]>(
-    'SELECT product FROM game_purchases WHERE account_id=$1 AND product=$2 LIMIT 1', [id, product],
+    'SELECT product FROM game_purchases WHERE account_id=$1 AND product=$2 LIMIT 1',
+    [id, product],
   );
   return Boolean(purchase);
 }
@@ -95,19 +123,41 @@ export class GameCheckoutService {
     return {
       enabled: this.settings.get('GAME_CASH_CHECKOUT_ENABLED') === 'true',
       currency: 'NGN',
-      offers: (Object.keys(PRODUCTS) as PaidProductId[])
-        .filter((id) => !LEGACY_OFFERS.has(id))
-        .map((gearId) => ({
-        gearId,
-        kind: isCompanionSkill(gearId) ? 'skill' : gearId === DUAL_SUMMON_PRODUCT ? 'summon' : isPremiumFighter(gearId)
-          ? 'fighter'
-          : isCinderBundle(gearId)
-            ? 'cinders'
-          : isItem(gearId)
-            ? 'item'
-            : 'gear',
-        ...PRODUCTS[gearId],
-      })),
+      offers: (() => {
+        const staticOffers = Object.keys(PRODUCTS)
+          .filter((id) => !LEGACY_OFFERS.has(id))
+          .map((gearId) => ({
+            gearId,
+            kind: isCompanionSkill(gearId)
+              ? 'skill'
+              : gearId === DUAL_SUMMON_PRODUCT
+                ? 'summon'
+                : isPremiumFighter(gearId)
+                  ? 'fighter'
+                  : isCinderBundle(gearId)
+                    ? 'cinders'
+                    : isItem(gearId)
+                      ? 'item'
+                      : 'gear',
+            ...PRODUCTS[gearId as keyof typeof PRODUCTS],
+          }));
+        const dynamicGear = Object.entries(GEAR)
+          .map(([gearId, gear]) => ({ gearId, gear }))
+          .filter(
+            ({ gearId, gear }) =>
+              gear.paid &&
+              gear.cashAmountMinor &&
+              !Object.hasOwn(PRODUCTS, gearId),
+          )
+          .map(({ gearId, gear }) => ({
+            gearId,
+            kind: 'gear',
+            name: gear.name,
+            amountMinor: gear.cashAmountMinor,
+            imageUrl: gear.imageUrl,
+          }));
+        return [...staticOffers, ...dynamicGear];
+      })(),
     };
   }
 
@@ -125,9 +175,10 @@ export class GameCheckoutService {
     product: string,
     payerEmail: string,
   ) {
-    if (!Object.hasOwn(PRODUCTS, product))
+    const paidGear = paidGearProduct(product);
+    if (!Object.hasOwn(PRODUCTS, product) && !paidGear)
       throw new BadRequestException('This product has no cash offer.');
-    const gearId = product as PaidProductId;
+    const gearId = product;
     const email = payerEmail.trim().toLowerCase();
     const payerEmailHash = hash(email);
     const { order, initialize } = await this.db.transaction(async (tx) => {
@@ -152,7 +203,10 @@ export class GameCheckoutService {
         }
         return { order: previous, initialize: false };
       }
-      if (owns(account, gearId) || await ownsCinderSkill(tx, accountId, gearId))
+      if (
+        owns(account, gearId) ||
+        (await ownsCinderSkill(tx, accountId, gearId))
+      )
         throw new ConflictException('You already own this product.');
       const [open] = await tx.query<OrderRow[]>(
         "SELECT * FROM game_checkout_orders WHERE account_id=$1 AND gear_id=$2 AND status IN ('PENDING','REVIEW') ORDER BY (status='PENDING') DESC, created_at DESC LIMIT 1",
@@ -176,7 +230,9 @@ export class GameCheckoutService {
           accountId,
           requestId,
           gearId,
-          PRODUCTS[gearId].amountMinor,
+          Object.hasOwn(PRODUCTS, gearId)
+            ? PRODUCTS[gearId as keyof typeof PRODUCTS].amountMinor
+            : paidGear?.amountMinor,
           mode,
           `game-${id}`,
           payerEmailHash,
@@ -194,7 +250,7 @@ export class GameCheckoutService {
       amount: order.amount_minor,
       email,
       redirectUrl: `${this.settings.frontend()}/pages/embrace-game?gameOrder=${order.id}${destination}`,
-      title: `Embrace Your Horror · ${PRODUCTS[gearId].name}`,
+      title: `Embrace Your Horror · ${Object.hasOwn(PRODUCTS, gearId) ? PRODUCTS[gearId as keyof typeof PRODUCTS].name : (paidGear?.name ?? gearId)}`,
       expiresAt: order.expires_at,
     });
     await this.db.query(
@@ -320,7 +376,8 @@ export class GameCheckoutService {
         : evidence.amount !== order.amount_minor ||
             evidence.currency !== order.currency
           ? 'AMOUNT_OR_CURRENCY_MISMATCH'
-          : owns(account, order.gear_id) || await ownsCinderSkill(tx, order.account_id, order.gear_id)
+          : owns(account, order.gear_id) ||
+              (await ownsCinderSkill(tx, order.account_id, order.gear_id))
             ? 'ALREADY_OWNED'
             : null;
       if (reason) {
@@ -332,8 +389,10 @@ export class GameCheckoutService {
       }
       const product = current.gear_id;
       if (isCinderBundle(product)) {
-        await tx.query('UPDATE game_accounts SET credits=credits+$2 WHERE id=$1',
-          [current.account_id, CINDER_BUNDLES[product].cinders]);
+        await tx.query(
+          'UPDATE game_accounts SET credits=credits+$2 WHERE id=$1',
+          [current.account_id, CINDER_BUNDLES[product].cinders],
+        );
       } else if (isItem(product)) {
         await tx.query(
           `UPDATE game_accounts

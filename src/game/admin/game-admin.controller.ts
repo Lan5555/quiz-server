@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   CanActivate,
   Controller,
@@ -29,6 +30,7 @@ import {
   Length,
   Min,
   Max,
+  IsBoolean,
 } from 'class-validator';
 import type { Request } from 'express';
 import { GameAccountsService } from '../accounts/game-accounts.service';
@@ -42,6 +44,7 @@ import {
   validateStory,
 } from '../story/story-document';
 import { GameAdminService } from './game-admin.service';
+import { GameGearService } from '../gear/gear.service';
 
 type AdminRequest = Request & { gameModeratorId: string };
 type StoryFile = { buffer: Buffer };
@@ -149,6 +152,37 @@ class ShopItemDto {
   price!: number;
 }
 
+class AdminGearDto {
+  @Matches(/^[a-z][a-z0-9_]*$/)
+  gearId!: string;
+  @IsString()
+  @Length(2, 60)
+  name!: string;
+  @IsIn(['weapon', 'armor'])
+  slot!: 'weapon' | 'armor';
+  @IsIn(['common', 'rare', 'legendary'])
+  rarity!: 'common' | 'rare' | 'legendary';
+  @IsInt()
+  @Min(0)
+  attack!: number;
+  @IsInt()
+  @Min(0)
+  armor!: number;
+  @IsInt()
+  @Min(0)
+  price!: number;
+  @IsBoolean()
+  paid!: boolean;
+  @IsOptional()
+  @IsInt()
+  @Min(100)
+  cashAmountMinor?: number;
+  @IsOptional()
+  @IsString()
+  @Matches(/^(https?:\/\/|\/)/)
+  imageUrl?: string;
+}
+
 class RevisionDto {
   @Matches(
     /^(seed|[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/,
@@ -171,6 +205,7 @@ export class GameAdminController {
 
   constructor(
     private readonly admin: GameAdminService,
+    private readonly gear: GameGearService,
     private readonly gateway: GameGateway,
     private readonly story: StoryEngine,
   ) {}
@@ -282,6 +317,13 @@ export class GameAdminController {
   @Post('shop/items')
   createShopItem(@Body() body: ShopItemDto, @Req() req: AdminRequest) {
     return this.admin.createShopItem(req.gameModeratorId, body);
+  }
+
+  @Post('shop/gear')
+  createShopGear(@Body() body: AdminGearDto) {
+    if (body.paid && !body.cashAmountMinor)
+      throw new BadRequestException('Enter a cash price for paid gear.');
+    return this.gear.createGear(body);
   }
 
   @Get('orders')

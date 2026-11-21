@@ -7,13 +7,40 @@ export const PREMIUM_FIGHTERS = {
 
 export type PremiumFighterId = keyof typeof PREMIUM_FIGHTERS;
 
+export interface GearDefinition {
+  name: string;
+  slot: 'weapon' | 'armor';
+  rarity: 'common' | 'rare' | 'legendary';
+  attack: number;
+  armor: number;
+  price: number;
+  paid?: boolean;
+  cashAmountMinor?: number;
+  imageUrl?: string;
+  summonable?: boolean;
+}
+
 export function isPremiumFighter(id: unknown): id is PremiumFighterId {
   return typeof id === 'string' && Object.hasOwn(PREMIUM_FIGHTERS, id);
 }
 
-export const GEAR = {
-  crownforged_blade: { name: 'Crownforged Blade', slot: 'weapon', rarity: 'legendary', attack: 65, armor: 0, price: 0 },
-  sovereign_plate: { name: 'Sovereign Plate', slot: 'armor', rarity: 'legendary', attack: 0, armor: 45, price: 0 },
+export const GEAR: Record<string, GearDefinition> = {
+  crownforged_blade: {
+    name: 'Crownforged Blade',
+    slot: 'weapon',
+    rarity: 'legendary',
+    attack: 65,
+    armor: 0,
+    price: 0,
+  },
+  sovereign_plate: {
+    name: 'Sovereign Plate',
+    slot: 'armor',
+    rarity: 'legendary',
+    attack: 0,
+    armor: 45,
+    price: 0,
+  },
   iron_blade: {
     name: 'Iron Blade',
     slot: 'weapon',
@@ -62,11 +89,19 @@ export const GEAR = {
     armor: 30,
     price: 900,
   },
-} as const;
+};
 
 export const ITEMS = {
-  royal_bloodleaf: { name: 'Royal Bloodleaf', description: 'Restore 480 HP to yourself or a living ally.', price: 0 },
-  sovereign_ward: { name: 'Sovereign Ward', description: 'Guard yourself and add 45 Focus.', price: 0 },
+  royal_bloodleaf: {
+    name: 'Royal Bloodleaf',
+    description: 'Restore 480 HP to yourself or a living ally.',
+    price: 0,
+  },
+  sovereign_ward: {
+    name: 'Sovereign Ward',
+    description: 'Guard yourself and add 45 Focus.',
+    price: 0,
+  },
   bloodleaf_tonic: {
     name: 'Bloodleaf Tonic',
     description: 'Restore 320 HP to yourself or a living ally.',
@@ -91,11 +126,19 @@ export const JOBS = {
   },
 } as const;
 
-export type GearId = keyof typeof GEAR;
+export type GearId = string;
 export type BuiltInItemId = keyof typeof ITEMS;
 export type ItemId = BuiltInItemId | `custom_${string}`;
-export type ItemEffect = { name: string; description: string; effect: 'heal' | 'guard'; power: number };
-export const ITEM_EFFECTS: Record<BuiltInItemId, { effect: ItemEffect['effect']; power: number }> = {
+export type ItemEffect = {
+  name: string;
+  description: string;
+  effect: 'heal' | 'guard';
+  power: number;
+};
+export const ITEM_EFFECTS: Record<
+  BuiltInItemId,
+  { effect: ItemEffect['effect']; power: number }
+> = {
   bloodleaf_tonic: { effect: 'heal', power: 320 },
   ward_stone: { effect: 'guard', power: 25 },
   royal_bloodleaf: { effect: 'heal', power: 480 },
@@ -129,7 +172,7 @@ export const STARTER_LOADOUT: Loadout = {
 };
 
 export const SUMMON_COST = 100;
-export const PITY_AT = 10;
+export const PITY_AT = 90;
 export const SUMMON_POOL = [
   { id: 'bloodleaf_tonic', weight: 30 },
   { id: 'ward_stone', weight: 30 },

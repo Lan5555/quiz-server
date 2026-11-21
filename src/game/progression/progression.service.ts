@@ -103,7 +103,7 @@ export class ProgressionService {
       summon: {
         cost: SUMMON_COST,
         pityAt: PITY_AT,
-        pool: SUMMON_POOL,
+        pool: this.summonPool(),
         duplicateCredits: 35,
       },
     };
@@ -333,12 +333,34 @@ export class ProgressionService {
     return updated ? experience(updated.xp) : undefined;
   }
 
-  private rollSummon(guaranteed: boolean) {
-    const pool: ReadonlyArray<(typeof SUMMON_POOL)[number]> = guaranteed
-      ? SUMMON_POOL.filter(
-          ({ id }) => isGear(id) && GEAR[id].rarity === 'legendary',
+  private summonPool(): ReadonlyArray<{ id: string; weight: number }> {
+    const existing = new Set<string>(SUMMON_POOL.map(({ id }) => id));
+    const dynamic = Object.entries(GEAR)
+      .filter(([id, gear]) => !existing.has(id) && gear.summonable === true)
+      .map(([id, gear]) => ({
+        id,
+        weight: gear.rarity === 'legendary' ? 3 : gear.rarity === 'rare' ? 17 : 30,
+      }));
+
+    const dynamicLegendaries = dynamic.filter(({ id }) => GEAR[id].rarity === 'legendary');
+    const base = dynamicLegendaries.length
+      ? SUMMON_POOL.filter(({ id }) =>
+          !['hollowfang', 'oathkeeper_plate'].includes(id),
         )
       : SUMMON_POOL;
+
+    return [...base, ...dynamic];
+  }
+
+  private rollSummon(guaranteed: boolean) {
+    const pool = guaranteed
+      ? this.summonPool().filter(
+          ({ id }) =>
+            isGear(id) &&
+            GEAR[id].rarity === 'legendary' &&
+            (SUMMON_POOL.some((entry) => entry.id === id) || GEAR[id].summonable === true),
+        )
+      : this.summonPool();
     let ticket = randomInt(
       pool.reduce((total, entry) => total + entry.weight, 0),
     );

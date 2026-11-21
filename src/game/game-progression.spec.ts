@@ -19,7 +19,7 @@ import { StoryEngine } from './engines/story.engine';
 import { GameStore } from './game.store';
 import { GameGateway } from './game.gateway';
 import type { Player } from './game.types';
-import { STARTER_LOADOUT } from './progression/catalog';
+import { GEAR, isGear, STARTER_LOADOUT } from './progression/catalog';
 import { ProgressionService } from './progression/progression.service';
 import { BattleRewardRetentionService } from './progression/battle-reward-retention.service';
 import { EmbraceBattleRewardRetention1795478400000 } from '../migrations/1795478400000-EmbraceBattleRewardRetention';
@@ -166,19 +166,18 @@ describe('Embrace progression PostgreSQL integration', () => {
     expect(await progression.reward(id, randomUUID(), new Date())).toBeDefined();
   });
 
-  it('guarantees the tenth summon and settles battle Cinders and XP once', async () => {
+  it('guarantees the ninetieth summon and settles battle Cinders and XP once', async () => {
     const { id } = await accounts.authenticate(
       'Cinder',
       'long-game-pass',
       'test-summon',
       true,
     );
-    await query('UPDATE game_accounts SET pity=9 WHERE id=$1', [id]);
+    await query('UPDATE game_accounts SET pity=89 WHERE id=$1', [id]);
     const purchase = await progression.purchase(id, randomUUID(), 'summon');
     expect(purchase.result.guaranteed).toBe(true);
-    expect(['hollowfang', 'oathkeeper_plate']).toContain(
-      purchase.result.itemId,
-    );
+    expect(isGear(purchase.result.itemId)).toBe(true);
+    expect(GEAR[purchase.result.itemId].rarity).toBe('legendary');
     expect(purchase.profile.pity).toBe(0);
     const battleId = randomUUID();
     const settledAt = new Date();

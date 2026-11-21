@@ -604,7 +604,6 @@ export class GameGateway {
   handleConnection(socket: Socket) {
     const client: ConnectedClient = { socket };
     this.clients.add(client);
-    this.logger.debug(`Client connected: socket=${socket.id}`);
 
     this.send(socket, {
       type: 'CONNECTED',
@@ -627,9 +626,6 @@ export class GameGateway {
     socket.on('disconnect', (reason) => {
       this.clients.delete(client);
       this.removeFromRoom(client);
-      this.logger.debug(
-        `Client disconnected: socket=${socket.id} room=${client.roomCode ?? 'none'} reason=${reason}`,
-      );
     });
   }
 
@@ -665,9 +661,6 @@ export class GameGateway {
       }
       if (/^[A-Z_]{1,40}$/.test(event.type)) eventType = event.type;
 
-      this.logger.debug(
-        `Received ${eventType}: socket=${client.socket.id} room=${client.roomCode ?? 'none'}`,
-      );
       if (event.type === 'WATCH_GAME' || event.type === 'LEAVE_ROOM') {
         stage = 'apply_room_event';
         return this.handleEvent(client, event);
@@ -890,9 +883,6 @@ export class GameGateway {
     ) {
       startingHp = arenaId;
       arenaId = ROOM_ARENAS[0];
-      this.logger.debug(
-        `CREATE_ROOM recovered starting HP from arenaId: socket=${client.socket.id}`,
-      );
     }
     if (arenaId !== undefined && !ROOM_ARENAS.includes(arenaId)) {
       this.logger.warn(
@@ -1505,9 +1495,6 @@ export class GameGateway {
       );
     const decisionTime = blocked ? ENEMY_ATTACK_DELAY_MS : ROUND_DECISION_TIMEOUT_MS;
     const handle = setTimeout(() => {
-      this.logger.warn(
-        `Round timeout fired: room=${game.roomCode} team=${game.battle?.turnTeamId}`,
-      );
       void this.handleRoundTimeout(game.roomCode);
     }, decisionTime);
 

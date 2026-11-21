@@ -26,7 +26,7 @@ import {
 import { QueryFailedError } from 'typeorm';
 import { GameAccountsService } from './game-accounts.service';
 import { ProgressionService } from '../progression/progression.service';
-import { GEAR, JOBS } from '../progression/catalog';
+import { JOBS } from '../progression/catalog';
 import type { Loadout } from '../progression/catalog';
 import { GameCheckoutService } from '../payments/game-checkout.service';
 
@@ -43,10 +43,10 @@ class LoadoutDto implements Loadout {
   @IsIn(Object.keys(JOBS))
   job!: Loadout['job'];
 
-  @IsIn(Object.keys(GEAR))
+  @Matches(/^[a-z][a-z0-9_]{1,49}$/)
   weapon!: Loadout['weapon'];
 
-  @IsIn(Object.keys(GEAR))
+  @Matches(/^[a-z][a-z0-9_]{1,49}$/)
   armor!: Loadout['armor'];
 
   @Matches(/^[a-z0-9_-]{1,50}$/)

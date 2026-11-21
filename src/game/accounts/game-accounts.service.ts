@@ -13,6 +13,7 @@ import {
 } from 'node:crypto';
 import { promisify } from 'node:util';
 import { DataSource } from 'typeorm';
+import { GameGearService } from '../gear/gear.service';
 
 const deriveKey = promisify(scrypt);
 const tokenHash = (token: string) =>
@@ -31,7 +32,10 @@ export class GameAccountsService {
     { count: number; until: number }
   >();
 
-  constructor(private readonly db: DataSource) {}
+  constructor(
+    private readonly db: DataSource,
+    private readonly gameGear?: GameGearService,
+  ) {}
 
   async authenticate(
     username: string,
@@ -83,6 +87,7 @@ export class GameAccountsService {
         [tokenHash(token), id],
       );
     });
+    await this.gameGear?.fetchAllGear();
     return { id, username, token };
   }
 

@@ -1,4 +1,3 @@
-
 import type { EntityManager } from 'typeorm';
 import type { ItemEffect, ItemId } from './catalog';
 
@@ -21,12 +20,18 @@ export function itemDescription(effect: ItemEffect['effect'], power: number) {
     : `Guard yourself and add ${power} Focus.`;
 }
 
-export async function customItems(tx: EntityManager, id?: string): Promise<ShopItem[]> {
+export async function customItems(
+  tx: EntityManager,
+  id?: string,
+): Promise<ShopItem[]> {
   const rows = await tx.query<Omit<ShopItem, 'description'>[]>(
     id
       ? 'SELECT id,name,effect,power,price FROM game_shop_items WHERE id=$1'
       : 'SELECT id,name,effect,power,price FROM game_shop_items ORDER BY created_at,id',
     id ? [id] : [],
   );
-  return rows.map((row) => ({ ...row, description: itemDescription(row.effect, row.power) }));
+  return rows.map((row) => ({
+    ...row,
+    description: itemDescription(row.effect, row.power),
+  }));
 }

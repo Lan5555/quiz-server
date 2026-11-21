@@ -16,9 +16,10 @@ import {
   GameModeratorGuard,
 } from './admin/game-admin.controller';
 import { GameAdminService } from './admin/game-admin.service';
+import { GameGearModule } from './gear/gear.module';
 
 @Module({
-  imports: [GameCheckoutModule],
+  imports: [GameCheckoutModule, GameGearModule],
   controllers: [GameController, GameAccountController, GameAdminController],
 
   providers: [

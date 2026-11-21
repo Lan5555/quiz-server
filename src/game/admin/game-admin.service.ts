@@ -120,11 +120,20 @@ export class GameAdminService {
   async createShopItem(actor: string, input: ShopItemInput) {
     const name = input.name.trim();
     const { requestId, effect, power, price } = input;
-    if (name.length < 2 || name.length > 60 ||
-        (effect !== 'heal' && effect !== 'guard') ||
-        !Number.isInteger(power) || power < 1 || power > (effect === 'heal' ? 320 : 25) ||
-        !Number.isInteger(price) || price < 1 || price > 100000) {
-      throw new BadRequestException('Enter a valid name, effect, power and Cinder price.');
+    if (
+      name.length < 2 ||
+      name.length > 60 ||
+      (effect !== 'heal' && effect !== 'guard') ||
+      !Number.isInteger(power) ||
+      power < 1 ||
+      power > (effect === 'heal' ? 1000 : 25) ||
+      !Number.isInteger(price) ||
+      price < 1 ||
+      price > 100000
+    ) {
+      throw new BadRequestException(
+        'Enter a valid name, effect, power and Cinder price.',
+      );
     }
     const id = 'custom_' + requestId;
     return this.db.transaction(async (tx) => {
@@ -137,11 +146,19 @@ export class GameAdminService {
           'SELECT id FROM game_shop_items WHERE id=$1 AND name=$2 AND effect=$3 AND power=$4 AND price=$5 AND created_by=$6',
           [id, name, effect, power, price, actor],
         );
-        if (!same) throw new ConflictException('This request belongs to a different shop item.');
+        if (!same)
+          throw new ConflictException(
+            'This request belongs to a different shop item.',
+          );
       } else {
         await tx.query(
           "INSERT INTO game_admin_activity(id,actor_id,action,target,details) VALUES ($1,$2,'create_shop_item',$3,$4::jsonb)",
-          [requestId, actor, id, JSON.stringify({ name, effect, power, price })],
+          [
+            requestId,
+            actor,
+            id,
+            JSON.stringify({ name, effect, power, price }),
+          ],
         );
       }
       return (await customItems(tx, id))[0];
@@ -222,7 +239,9 @@ export class GameAdminService {
       } else if (
         action === 'items' &&
         typeof product === 'string' &&
-        (isItem(product) || (product.startsWith('custom_') && (await customItems(tx, product)).length > 0)) &&
+        (isItem(product) ||
+          (product.startsWith('custom_') &&
+            (await customItems(tx, product)).length > 0)) &&
         Number.isInteger(amount) &&
         amount !== 0 &&
         Math.abs(amount!) <= 1000

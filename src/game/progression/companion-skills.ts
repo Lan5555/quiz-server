@@ -1,6 +1,5 @@
 import type { FighterId } from '../game.types';
 
-
 const ATTACKER_COMPANIONS = {
   call_moonveil_double: {
     fighter: 'lady-ley',
@@ -97,7 +96,10 @@ const ATTACKER_COMPANIONS = {
 export const DUAL_SUMMON_PRODUCT = 'dual_summoning';
 export type CompanionRole = 'attacker' | 'healer' | 'buffer';
 type AttackerId = keyof typeof ATTACKER_COMPANIONS;
-export type CompanionSkillId = AttackerId | `${AttackerId}_healer` | `${AttackerId}_buffer`;
+export type CompanionSkillId =
+  | AttackerId
+  | `${AttackerId}_healer`
+  | `${AttackerId}_buffer`;
 type CompanionSkill = {
   fighter: FighterId;
   name: string;
@@ -111,8 +113,24 @@ type CompanionSkill = {
 export const COMPANION_SKILLS = Object.fromEntries(
   Object.entries(ATTACKER_COMPANIONS).flatMap(([id, skill]) => [
     [id, { ...skill, role: 'attacker' }],
-    [id + '_healer', { ...skill, role: 'healer', name: skill.name + ' Healer', entity: skill.entity + ' Healer' }],
-    [id + '_buffer', { ...skill, role: 'buffer', name: skill.name + ' Guardian', entity: skill.entity + ' Guardian' }],
+    [
+      id + '_healer',
+      {
+        ...skill,
+        role: 'healer',
+        name: skill.name + ' Healer',
+        entity: skill.entity + ' Healer',
+      },
+    ],
+    [
+      id + '_buffer',
+      {
+        ...skill,
+        role: 'buffer',
+        name: skill.name + ' Guardian',
+        entity: skill.entity + ' Guardian',
+      },
+    ],
   ]),
 ) as Record<CompanionSkillId, CompanionSkill>;
 
@@ -121,15 +139,37 @@ export function isCompanionSkill(id: unknown): id is CompanionSkillId {
 }
 
 export const CASH_SKILLS = {
-  call_moonveil_double: { name: COMPANION_SKILLS.call_moonveil_double.name, amountMinor: 120_000 },
-  call_moonveil_double_healer: { name: COMPANION_SKILLS.call_moonveil_double_healer.name, amountMinor: 120_000 },
-  call_grave_cantor: { name: COMPANION_SKILLS.call_grave_cantor.name, amountMinor: 120_000 },
-  call_grave_cantor_buffer: { name: COMPANION_SKILLS.call_grave_cantor_buffer.name, amountMinor: 120_000 },
+  call_moonveil_double: {
+    name: COMPANION_SKILLS.call_moonveil_double.name,
+    amountMinor: 120_000,
+  },
+  call_moonveil_double_healer: {
+    name: COMPANION_SKILLS.call_moonveil_double_healer.name,
+    amountMinor: 120_000,
+  },
+  call_grave_cantor: {
+    name: COMPANION_SKILLS.call_grave_cantor.name,
+    amountMinor: 120_000,
+  },
+  call_grave_cantor_buffer: {
+    name: COMPANION_SKILLS.call_grave_cantor_buffer.name,
+    amountMinor: 120_000,
+  },
 } as const;
 
 export function companionSkillDescription(id: CompanionSkillId) {
   const { entity, damage, role } = COMPANION_SKILLS[id];
-  if (role === 'healer') return 'Summon ' + entity + ' to heal the most injured living ally for up to 90 HP per allied turn.';
-  if (role === 'buffer') return 'Summon ' + entity + ' to renew Rage on its owner whenever the attack buff expires.';
+  if (role === 'healer')
+    return (
+      'Summon ' +
+      entity +
+      ' to heal the most injured living ally for up to 90 HP per allied turn.'
+    );
+  if (role === 'buffer')
+    return (
+      'Summon ' +
+      entity +
+      ' to renew Rage on its owner whenever the attack buff expires.'
+    );
   return `Summon ${entity} once per battle. It attacks independently once per allied turn for up to ${damage} extra damage each.`;
 }
